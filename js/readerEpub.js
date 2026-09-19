@@ -4,6 +4,7 @@
 // saved underlines back onto the page.
 // ============================================================================
 import * as annotations from "./annotations.js";
+import { attachSwipe } from "./gestures.js";
 
 let book = null;
 let rendition = null;
@@ -11,6 +12,7 @@ let onLocationChange = null;
 let containerEl = null;
 let resizeObserver = null;
 let lastCfi = null;
+let onTapCenter = null;
 
 function debounce(fn, ms) {
   let t;
@@ -37,8 +39,9 @@ function estimateProgress(location) {
   return undefined;
 }
 
-export async function openEpub({ container, blob, savedLocation, onLocation }) {
+export async function openEpub({ container, blob, savedLocation, onLocation, onTapCenter: tapCenter }) {
   onLocationChange = onLocation;
+  onTapCenter = tapCenter;
   containerEl = container;
   const arrayBuffer = await blob.arrayBuffer();
   book = ePub(arrayBuffer);
@@ -48,6 +51,40 @@ export async function openEpub({ container, blob, savedLocation, onLocation }) {
     spread: "auto", // lets epub.js itself decide single vs. two-column layout by width
     flow: "paginated",
   });
+
+  // epub.js renders each chapter inside its own iframe, so touch and key
+  // events fired over the text never reach the host page. This hook runs for
+  // every chapter as it's rendered and wires the gestures up inside that
+  // iframe's own document, which is the only place they're observable.
+  rendition.hooks.content.register((contents) => {
+    const doc = contents.document;
+    if (!doc) return;
+    attachSwipe(doc.documentElement, {
+      onPrev: () => prevPage(),
+      onNext: () => nextPage(),
+    });
+    // Tap zones. Clicks land inside the chapter's iframe and never reach the
+    // host page, so the edges (page turn) and the middle (show/hide the bars)
+    // both have to be handled in here.
+    doc.addEventListener("click", (e) => {
+      const sel = doc.getSelection();
+      if (sel && !sel.isCollapsed && sel.toString().trim()) return; // selecting to underline
+      const w = doc.documentElement.clientWidth || 1;
+      const x = e.clientX;
+      if (x < w * 0.25) prevPage();
+      else if (x > w * 0.75) nextPage();
+      else if (onTapCenter) onTapCenter();
+    });
+    doc.addEventListener("keydown", (e) => {
+      if (e.key === "ArrowLeft") { prevPage(); e.preventDefault(); }
+      if (e.key === "ArrowRight") { nextPage(); e.preventDefault(); }
+    });
+  });
+
+  // Readable defaults. EPUBs ship wildly inconsistent styling, and many lean on
+  // thin or tightly-leaded type that's hard work on a backlit screen — these
+  // override the worst of it without flattening the book's own design.
+  applyTypography();
 
   await rendition.display(savedLocation || undefined);
 
@@ -113,6 +150,41 @@ export function nextPage() {
 
 export function prevPage() {
   rendition.prev();
+}
+
+// Typeface stacks chosen for on-screen reading rather than print fidelity:
+// both have generous x-heights and hold up at small sizes on a tablet.
+const FONT_STACKS = {
+  serif: `"Iowan Old Style", "Charter", "Palatino Linotype", Georgia, serif`,
+  sans: `-apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif`,
+};
+
+let fontFamily = "serif";
+
+function applyTypography() {
+  if (!rendition) return;
+  rendition.themes.default({
+    "body, p, div, span, li": {
+      "font-family": `${FONT_STACKS[fontFamily]} !important`,
+      "line-height": "1.62 !important",
+      "color": "#191512 !important",
+      "-webkit-font-smoothing": "antialiased",
+      "text-rendering": "optimizeLegibility",
+    },
+    "p": { "margin-bottom": "0.85em", "hyphens": "auto" },
+  });
+}
+
+export function setFontFamily(name) {
+  fontFamily = FONT_STACKS[name] ? name : "serif";
+  applyTypography();
+  // Re-display so the new metrics are used for pagination immediately.
+  if (rendition && lastCfi) rendition.display(lastCfi);
+  return fontFamily;
+}
+
+export function getFontFamily() {
+  return fontFamily;
 }
 
 export function setFontSize(percent) {

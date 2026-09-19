@@ -180,6 +180,7 @@ function renderPanel(shelves) {
     <div class="shelf-panel-header">
       <h2>${escapeHtml(active.name)}</h2>
       <span class="book-sub">${active.books.length} book${active.books.length === 1 ? "" : "s"}</span>
+      ${active.id === "smart:duplicates" ? `<button class="btn primary" id="tidyDupesBtn">Hide duplicates</button>` : ""}
       ${active.kind === "custom" ? `<button class="shelf-delete-btn" id="deleteShelfBtn">Delete shelf</button>` : ""}
     </div>
   `;
@@ -200,6 +201,16 @@ function renderPanel(shelves) {
       const gridEl = panel.querySelector(`.grid[data-section="${CSS.escape(sec.label)}"]`);
       for (const book of sec.books) gridEl.appendChild(renderBookCard(book));
     }
+  }
+
+  const tidyBtn = el("tidyDupesBtn");
+  if (tidyBtn) {
+    tidyBtn.addEventListener("click", async () => {
+      const n = await shelf.hideDuplicates();
+      toast(n === 0 ? "No duplicates to hide" : `Hid ${n} duplicate${n === 1 ? "" : "s"}`);
+      expandedShelfId = "smart:all";
+      await renderLibrary();
+    });
   }
 
   const delBtn = el("deleteShelfBtn");
@@ -278,12 +289,23 @@ async function toggleShelfMenu(book, anchorBtn) {
     shelfItems +
     `<div class="shelf-menu-item" data-action="new"><span class="check">＋</span>New category…</div>` +
     `<div class="shelf-menu-sep"></div>` +
+    (book.hidden
+      ? `<div class="shelf-menu-item" data-action="unhide"><span class="check">👁</span>Unhide book</div>`
+      : `<div class="shelf-menu-item" data-action="hide"><span class="check">🚫</span>Hide book</div>`) +
     `<div class="shelf-menu-item danger" data-action="delete"><span class="check">🗑</span>Remove book</div>`;
 
   menu.addEventListener("click", async (e) => {
     e.stopPropagation();
     const item = e.target.closest(".shelf-menu-item");
     if (!item) return;
+    if (item.dataset.action === "hide" || item.dataset.action === "unhide") {
+      const hide = item.dataset.action === "hide";
+      closeShelfMenu();
+      await shelf.setBookHidden(book.id, hide);
+      toast(hide ? `Hidden — find it on the Hidden shelf` : `"${book.title}" is back on your shelves`);
+      await renderLibrary();
+      return;
+    }
     if (item.dataset.action === "delete") {
       // Deliberately a two-step confirm: this erases the file and any
       // underlines/bookmarks from the device, and there's no undo for it.
@@ -324,6 +346,8 @@ function setPdfControlsVisible(visible) {
   el("pdfViewModeSelect").classList.toggle("hidden", !visible);
   el("fontMinusBtn").classList.toggle("hidden", visible);
   el("fontPlusBtn").classList.toggle("hidden", visible);
+  el("fontFamilySelect").classList.toggle("hidden", visible);
+  updatePageArrows();
 }
 
 // Synchronous DOM swap only (no awaits) — this is what the View Transition
@@ -391,6 +415,7 @@ async function loadBookContent(meta) {
         blob,
         savedLocation: meta.lastLocation,
         onLocation: (cfi, progress) => shelf.saveLastLocation(meta.id, cfi, progress),
+        onTapCenter: () => toggleImmersive(),
       });
     } else {
       const saved = meta.lastLocation || {};
@@ -405,6 +430,8 @@ async function loadBookContent(meta) {
         },
       });
     }
+    if (currentFormat === "epub") el("fontFamilySelect").value = epubReader.getFontFamily();
+    updatePageArrows();
     el("readerMorphSurface").classList.add("hidden");
   } catch (err) {
     console.error("Failed to open book:", err);
@@ -443,7 +470,10 @@ async function closeBook() {
     renderRail(shelves);
     renderPanel(shelves);
     readerView.classList.remove("active");
+    document.body.classList.remove("immersive");
     shelfView.classList.remove("hidden");
+    el("pageArrowPrev").hidden = true;
+    el("pageArrowNext").hidden = true;
     el("titleText").textContent = "Shelf";
   };
 
@@ -478,18 +508,76 @@ window.addEventListener("unhandledrejection", (e) => {
 // PDF page navigation via tapping left/right thirds of the container
 // (only meaningful in single/double page mode — scroll mode is scrolled).
 el("pdfContainer") && el("pdfContainer").addEventListener("click", (e) => {
-  if (currentFormat !== "pdf" || pdfReader.getViewMode() === "scroll") return;
+  if (currentFormat !== "pdf") return;
+  if (pdfReader.getViewMode() === "scroll") { toggleImmersive(); return; }
   const rect = el("pdfContainer").getBoundingClientRect();
   const x = e.clientX - rect.left;
   if (x < rect.width * 0.25) pdfReader.prevPage();
   else if (x > rect.width * 0.75) pdfReader.nextPage();
+  else toggleImmersive();
 });
 
 el("prevArrowBtn").addEventListener("click", () => pdfReader.prevPage());
 el("nextArrowBtn").addEventListener("click", () => pdfReader.nextPage());
 
+// ---- Page turning: on-screen edge arrows, and keyboard arrows ---------------
+
+function turnPage(dir) {
+  if (currentFormat === "epub") {
+    dir > 0 ? epubReader.nextPage() : epubReader.prevPage();
+  } else if (currentFormat === "pdf" && pdfReader.getViewMode() !== "scroll") {
+    dir > 0 ? pdfReader.nextPage() : pdfReader.prevPage();
+  }
+}
+
+el("pageArrowPrev").addEventListener("click", (e) => { e.stopPropagation(); turnPage(-1); });
+el("pageArrowNext").addEventListener("click", (e) => { e.stopPropagation(); turnPage(1); });
+
+// In continuous-scroll PDFs there are no discrete pages to flip, so the arrows
+// would be lying about what they do.
+function updatePageArrows() {
+  const scrollMode = currentFormat === "pdf" && pdfReader.getViewMode() === "scroll";
+  const show = !!currentFormat && !scrollMode;
+  el("pageArrowPrev").hidden = !show;
+  el("pageArrowNext").hidden = !show;
+}
+
+document.addEventListener("keydown", (e) => {
+  if (!readerView.classList.contains("active")) return;
+  if (e.key === "ArrowLeft") { turnPage(-1); e.preventDefault(); }
+  if (e.key === "ArrowRight") { turnPage(1); e.preventDefault(); }
+  if (e.key === "Escape" && document.body.classList.contains("immersive")) setImmersive(false);
+});
+
+// ---- Immersive reading mode ------------------------------------------------
+// Only ever entered from the reader, and always escapable by tapping the middle
+// of the page again — plus Escape on a keyboard. The first time it happens we
+// say how to get back, so the bars vanishing can't feel like the app breaking.
+let toldAboutImmersive = false;
+
+function setImmersive(on) {
+  document.body.classList.toggle("immersive", on);
+  if (on && !toldAboutImmersive) {
+    toldAboutImmersive = true;
+    try { localStorage.setItem("shelf.immersiveHintSeen", "1"); } catch (_) {}
+    toast("Tap the middle of the page to bring the bars back");
+  }
+}
+
+function toggleImmersive() {
+  if (!readerView.classList.contains("active")) return;
+  setImmersive(!document.body.classList.contains("immersive"));
+}
+
+try { toldAboutImmersive = localStorage.getItem("shelf.immersiveHintSeen") === "1"; } catch (_) {}
+
 el("pdfViewModeSelect").addEventListener("change", (e) => {
   pdfReader.setViewMode(e.target.value);
+  updatePageArrows();
+});
+
+el("fontFamilySelect").addEventListener("change", (e) => {
+  epubReader.setFontFamily(e.target.value);
 });
 
 el("zoomOutBtn").addEventListener("click", () => pdfReader.setZoom(pdfReader.getZoomFactor() - 0.15));

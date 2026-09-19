@@ -66,6 +66,10 @@
       <span id="pageInfo" class="book-sub"></span>
       <span class="spacer"></span>
 
+      <select id="fontFamilySelect" class="btn" title="Reading typeface">
+        <option value="serif">Serif</option>
+        <option value="sans">Sans</option>
+      </select>
       <button class="btn icon" id="fontMinusBtn">A-</button>
       <button class="btn icon" id="fontPlusBtn">A+</button>
       <button class="btn icon pdf-only hidden" id="zoomOutBtn" title="Zoom out">−</button>
@@ -82,6 +86,8 @@
         <div id="epubContainer" class="hidden"></div>
         <div id="pdfContainer" class="hidden"></div>
       </div>
+      <button class="page-arrow left" id="pageArrowPrev" aria-label="Previous page">‹</button>
+      <button class="page-arrow right" id="pageArrowNext" aria-label="Next page">›</button>
       <div id="readerMorphSurface" class="reader-morph-surface hidden">
         <span id="readerMorphText">Opening…</span>
         <button class="btn" id="morphBackBtn" hidden>‹ Back to shelf</button>

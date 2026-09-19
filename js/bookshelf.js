@@ -82,9 +82,10 @@ export async function importLocalFile(file) {
   return { meta, duplicate: false };
 }
 
-export async function getShelf() {
+export async function getShelf({ includeHidden = false } = {}) {
   const books = await db.getAllBooks();
-  return books.sort((a, b) => new Date(b.updatedAt || 0) - new Date(a.updatedAt || 0));
+  const visible = includeHidden ? books : books.filter((b) => !b.hidden);
+  return visible.sort((a, b) => new Date(b.updatedAt || 0) - new Date(a.updatedAt || 0));
 }
 
 // Makes sure the raw bytes for a book are available locally, downloading
@@ -138,9 +139,86 @@ export async function removeBook(bookId) {
 // computed automatically from book metadata; custom shelves are user-created
 // and remember which books were explicitly added to them.
 
+// ---- Duplicate detection ----------------------------------------------------
+// Two entries count as the same book when their titles match once punctuation,
+// case and spacing are ignored, and they're the same format. This deliberately
+// catches copies that arrived by different routes — one imported from Files and
+// one synced from OneDrive have completely different ids, but they're still the
+// same book to a reader.
+function normalizeTitle(title) {
+  return String(title || "")
+    .toLowerCase()
+    .replace(/\.(epub|pdf)$/i, "")
+    // Strip the marks download folders and file managers add to second copies:
+    // "book (1)", "book copy", "book - Copy 2". Without this the very files
+    // most likely to BE duplicates are the ones that fail to match.
+    .replace(/\s*\(\d+\)\s*$/, "")
+    .replace(/\s*-?\s*copy(\s*\d+)?\s*$/i, "")
+    .replace(/[_\-–—]+/g, " ")
+    .replace(/[^a-z0-9 ]/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+export function duplicateKey(book) {
+  return `${normalizeTitle(book.title)}|${book.format}`;
+}
+
+// Groups of 2+ books that all look like the same title.
+export function findDuplicateGroups(books) {
+  const byKey = new Map();
+  for (const b of books) {
+    const k = duplicateKey(b);
+    if (!k.startsWith("|")) {
+      if (!byKey.has(k)) byKey.set(k, []);
+      byKey.get(k).push(b);
+    }
+  }
+  return [...byKey.values()].filter((g) => g.length > 1);
+}
+
+// Which copy to keep: the one you've read furthest into, falling back to the
+// most recently touched. Losing reading position to a cleanup would be worse
+// than leaving a duplicate on the shelf.
+function bestCopy(group) {
+  return [...group].sort((a, b) => {
+    const pa = a.progress || 0;
+    const pb = b.progress || 0;
+    if (pb !== pa) return pb - pa;
+    return new Date(b.updatedAt || 0) - new Date(a.updatedAt || 0);
+  })[0];
+}
+
+export async function setBookHidden(bookId, hidden) {
+  const meta = await db.getBookMeta(bookId);
+  if (!meta) return;
+  meta.hidden = !!hidden;
+  await db.saveBookMeta(meta);
+}
+
+// Hides every copy except the best one in each duplicate group. Hiding rather
+// than deleting is deliberate — nothing is destroyed, and the Hidden shelf lets
+// you put anything back.
+export async function hideDuplicates() {
+  const books = await getShelf({ includeHidden: false });
+  const groups = findDuplicateGroups(books);
+  let hiddenCount = 0;
+  for (const group of groups) {
+    const keep = bestCopy(group);
+    for (const b of group) {
+      if (b.id !== keep.id) {
+        await setBookHidden(b.id, true);
+        hiddenCount++;
+      }
+    }
+  }
+  return hiddenCount;
+}
+
 const SMART_SHELF_DEFS = [
   { id: "smart:all", name: "All Books", always: true, match: () => true },
   { id: "smart:continue", name: "Continue Reading", always: false, match: (b) => !!b.lastLocation },
+  { id: "smart:duplicates", name: "Duplicates", always: false, match: (b, ctx) => ctx.duplicateIds.has(b.id) },
   { id: "smart:onedrive", name: "OneDrive", always: false, match: (b) => b.source === "onedrive" },
   { id: "smart:local", name: "On This Device", always: false, match: (b) => b.source === "local" },
   { id: "smart:epub", name: "EPUB", always: false, match: (b) => b.format === "epub" },
@@ -151,14 +229,27 @@ const SMART_SHELF_DEFS = [
 // Smart shelves that would be empty are omitted (except "All Books", which is
 // always present as a home base) so the rail doesn't fill up with dead tabs.
 export async function listAllShelves() {
-  const books = await getShelf();
-  const shelves = [];
+  const all = await getShelf({ includeHidden: true });
+  const books = all.filter((b) => !b.hidden);
+  const hiddenBooks = all.filter((b) => b.hidden);
 
+  const duplicateIds = new Set();
+  for (const group of findDuplicateGroups(books)) {
+    for (const b of group) duplicateIds.add(b.id);
+  }
+  const ctx = { duplicateIds };
+
+  const shelves = [];
   for (const def of SMART_SHELF_DEFS) {
-    const matched = books.filter(def.match);
+    const matched = books.filter((b) => def.match(b, ctx));
     if (def.always || matched.length > 0) {
       shelves.push({ id: def.id, name: def.name, kind: "smart", books: matched });
     }
+  }
+
+  // Hidden books live only here, so they're out of the way but never lost.
+  if (hiddenBooks.length > 0) {
+    shelves.push({ id: "smart:hidden", name: "Hidden", kind: "smart", books: hiddenBooks });
   }
 
   const customRecords = await db.getAllShelves();

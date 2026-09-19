@@ -8,6 +8,7 @@
 // stay correct no matter what zoom level or screen size they're viewed at.
 // ============================================================================
 import * as annotations from "./annotations.js";
+import { attachSwipe } from "./gestures.js";
 
 // pdf.js v4 ships as an ES module only — loading it with a plain <script> tag
 // silently leaves pdfjsLib undefined and every PDF fails to open. Import it
@@ -27,6 +28,7 @@ let containerEl = null;
 let onStateChange = null;
 let resizeObserver = null;
 let scrollObserver = null;
+let detachSwipe = null;
 const renderedScrollPages = new Set();
 
 export async function openPdf({ container, blob, savedState, onState }) {
@@ -43,6 +45,14 @@ export async function openPdf({ container, blob, savedState, onState }) {
   zoomFactor = savedState?.zoomFactor || 1;
 
   attachResizeHandling();
+  // Swipe to turn pages. Disabled in continuous-scroll mode, where a
+  // horizontal flick has no meaning and the gesture belongs to the scroller.
+  if (detachSwipe) detachSwipe();
+  detachSwipe = attachSwipe(containerEl, {
+    onPrev: () => prevPage(),
+    onNext: () => nextPage(),
+    isEnabled: () => viewMode !== "scroll",
+  });
   await render();
 }
 

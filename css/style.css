@@ -342,11 +342,49 @@ select.btn { appearance: none; -webkit-appearance: none; font-size: 13px; paddin
    back button in it) always stays visible and tappable. */
 .reader-stage { position: relative; flex: 1; min-height: 0; display: flex; }
 
+/* ---- Immersive reading: bars out of the way ------------------------------
+   Tapping the middle of the page collapses the top bar and the reader toolbar
+   so the page has the whole screen. They collapse rather than merely fade, so
+   the reclaimed space actually goes to the text. Tapping the middle again
+   brings them straight back. */
+body.immersive .topbar,
+body.immersive .reader-toolbar {
+  max-height: 0;
+  opacity: 0;
+  padding-top: 0; padding-bottom: 0;
+  border-bottom-width: 0;
+  overflow: hidden;
+  pointer-events: none;
+}
+.topbar, .reader-toolbar {
+  max-height: 200px;
+  transition: max-height 0.24s ease, opacity 0.18s ease,
+              padding 0.24s ease, border-width 0.24s ease;
+}
+body.immersive .page-arrow { opacity: 0; pointer-events: none; }
+.page-arrow { transition: opacity 0.2s ease, background 0.15s ease, color 0.15s ease; }
+
+/* Page-turn arrows pinned to the edges of the page area. Deliberately
+   low-contrast so they don't compete with the text, but a full 44px touch
+   target so they're easy to hit with a thumb. */
+.page-arrow {
+  position: absolute; top: 50%; transform: translateY(-50%);
+  width: 44px; height: 64px; z-index: 2;
+  border: none; border-radius: 10px; cursor: pointer;
+  background: rgba(40, 26, 12, 0.13); color: rgba(40, 26, 12, 0.6);
+  font-size: 30px; line-height: 1; display: flex; align-items: center; justify-content: center;
+  transition: background 0.15s ease, color 0.15s ease;
+}
+.page-arrow:hover { background: rgba(40, 26, 12, 0.26); color: rgba(40, 26, 12, 0.9); }
+.page-arrow.left { left: 6px; }
+.page-arrow.right { right: 6px; }
+.page-arrow[hidden] { display: none; }
+
 .reader-morph-surface {
   position: absolute; inset: 0; background: var(--reader-bg);
   display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 14px;
   color: var(--reader-text); font-weight: 600; font-size: 15px;
-  z-index: 1; text-align: center; padding: 20px;
+  z-index: 4; text-align: center; padding: 20px;
 }
 .reader-morph-surface #morphBackBtn {
   background: var(--brass); color: var(--accent-text); font-weight: 600;
