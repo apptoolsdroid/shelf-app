@@ -2,9 +2,24 @@
 // CONFIG — fill this in once after you register a free Azure AD app.
 // See README.md for the exact click-by-click steps.
 // ============================================================================
+// Client IDs can be pasted into the app itself (Sign in → the provider →
+// the setup panel), which saves editing this file and re-uploading the site
+// every time. Anything saved in the app wins over the values below.
+function saved(key, fallback) {
+  try {
+    return localStorage.getItem(key) || fallback;
+  } catch (_) {
+    return fallback; // private browsing — fall back to the built-in value
+  }
+}
+
+const AZURE_CLIENT_ID = "PASTE-YOUR-AZURE-APP-CLIENT-ID-HERE";
+const GOOGLE_CLIENT_ID = "PASTE-YOUR-GOOGLE-OAUTH-CLIENT-ID-HERE";
+
 export const CONFIG = {
-  // Paste the "Application (client) ID" from your Azure App Registration here.
-  clientId: "PASTE-YOUR-AZURE-APP-CLIENT-ID-HERE",
+  // Paste the "Application (client) ID" from your Azure App Registration here,
+  // or into the app's own setup panel.
+  get clientId() { return saved("shelf.msClientId", AZURE_CLIENT_ID); },
 
   // "consumers" = personal Microsoft accounts (outlook.com, hotmail, live).
   // Use "common" instead if you also want to allow work/school accounts.
@@ -24,13 +39,13 @@ export const CONFIG = {
   // instead, create an OAuth client ID in the Google Cloud Console and paste
   // it here — README section 1b has the click-by-click steps.
   google: {
-    clientId: "PASTE-YOUR-GOOGLE-OAUTH-CLIENT-ID-HERE",
+    get clientId() { return saved("shelf.googleClientId", GOOGLE_CLIENT_ID); },
 
     // "drive.file" lets the app see only the files it created itself, which is
     // the least invasive scope that still syncs everything between your own
     // devices. Change it to "https://www.googleapis.com/auth/drive" if you also
     // want the app to pick up books you drop into the folder by hand.
-    scope: "https://www.googleapis.com/auth/drive.file",
+    get scope() { return saved("shelf.googleScope", "https://www.googleapis.com/auth/drive.file"); },
   },
 
   // The cloud folder (in the drive root) that acts as your

@@ -24,8 +24,38 @@ async function graphFetch(path, options = {}) {
   return resp;
 }
 
+let chosenFolderName = null;
+
+// Lets the app be pointed at a folder other than the configured default, so a
+// second device can join whichever folder the first one is using.
+export function useFolder(folder) {
+  chosenFolderName = folder && folder.name ? folder.name : null;
+}
+
+function folderPath() {
+  return chosenFolderName || CONFIG.booksFolderPath;
+}
+
 function encodedFolderPath() {
-  return CONFIG.booksFolderPath.split("/").map(encodeURIComponent).join("/");
+  return folderPath().split("/").map(encodeURIComponent).join("/");
+}
+
+export async function listFolders() {
+  const resp = await graphFetch("/me/drive/root/children?$select=id,name,folder&$top=200");
+  const data = await resp.json();
+  return (data.value || [])
+    .filter((item) => item.folder)
+    .map((item) => ({ id: item.id, name: item.name }));
+}
+
+export async function createFolder(name) {
+  const resp = await graphFetch("/me/drive/root/children", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ name, folder: {}, "@microsoft.graph.conflictBehavior": "rename" }),
+  });
+  const item = await resp.json();
+  return { id: item.id, name: item.name };
 }
 
 // Ensures the configured bookshelf folder exists in OneDrive, creating it

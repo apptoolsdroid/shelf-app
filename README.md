@@ -112,6 +112,11 @@ Apps, Cloudflare Pages. GitHub Pages is just the simplest free option.)
   Chrome will offer "Install app," or use the menu → "Add to Home screen."
   From then on it opens full-screen from its own icon, like any app.
 - **Sign in**: tap "Sign in," approve the Microsoft popup.
+- **Choosing the sync folder**: tap **Sign in** once connected and you'll see
+  **Sync folder**. That lists the folders the app can see in your drive, and
+  lets you create a new one. This is how a second device joins the library:
+  create the folder on the first device, then on the second pick the same one
+  from that list. The choice is remembered per drive.
 - **Syncing across devices**: tap **Sign in** and pick OneDrive or Google
   Drive. Then the cloud icon in the header does a two-way sync: it pulls down
   anything new in the cloud folder, uploads books you imported on this device,

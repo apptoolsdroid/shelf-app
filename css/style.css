@@ -578,3 +578,55 @@ body.inking .textLayer { user-select: none; }
   color: var(--text); font-size: 13.5px; padding: 9px 10px; border-radius: 6px; cursor: pointer;
 }
 .provider-item:hover { background: var(--border); }
+
+/* ---- One-time cloud setup panel ------------------------------------------ */
+.setup-overlay {
+  position: fixed; inset: 0; z-index: 90;
+  background: rgba(0,0,0,0.6);
+  display: flex; align-items: center; justify-content: center; padding: 20px;
+}
+.setup-overlay.hidden { display: none; }
+.setup-card {
+  background: var(--bg-elevated); color: var(--text);
+  border: 1px solid var(--brass-dark); border-radius: 14px;
+  padding: 22px; max-width: 520px; width: 100%;
+  max-height: 88vh; overflow-y: auto;
+  box-shadow: 0 20px 50px rgba(0,0,0,0.6);
+}
+.setup-card h2 {
+  font-family: var(--serif); font-size: 21px; margin: 0 0 8px; color: var(--text);
+}
+.setup-intro { font-size: 13.5px; line-height: 1.55; color: var(--text-dim); margin: 0 0 14px; }
+.setup-steps { font-size: 13px; line-height: 1.6; padding-left: 20px; margin: 0 0 16px; }
+.setup-steps li { margin-bottom: 7px; }
+.setup-steps a { color: var(--brass); }
+.setup-steps code {
+  background: rgba(0,0,0,0.25); padding: 1px 5px; border-radius: 4px; font-size: 12px;
+}
+.setup-field { display: block; margin-bottom: 14px; }
+.setup-field span { display: block; font-size: 12px; color: var(--text-dim); margin-bottom: 5px; }
+.setup-field input {
+  width: 100%; padding: 9px 10px; border-radius: 8px; font-size: 13px;
+  border: 1px solid var(--border); background: var(--bg); color: var(--text);
+}
+.setup-field input[readonly] { color: var(--brass); }
+.setup-note { font-size: 12px; color: var(--text-dim); line-height: 1.5; margin: 0 0 16px; }
+.setup-actions { display: flex; gap: 8px; justify-content: flex-end; }
+
+/* ---- Cloud folder picker -------------------------------------------------- */
+.folder-list {
+  max-height: 260px; overflow-y: auto; margin-bottom: 14px;
+  border: 1px solid var(--border); border-radius: 8px;
+}
+.folder-list:empty { display: none; }
+.folder-row {
+  display: flex; align-items: center; gap: 9px; width: 100%;
+  padding: 10px 12px; border: none; background: none; cursor: pointer;
+  color: var(--text); font-size: 13.5px; text-align: left;
+  border-bottom: 1px solid var(--border);
+}
+.folder-row:last-child { border-bottom: none; }
+.folder-row:hover { background: var(--border); }
+.folder-row.current { color: var(--brass); font-weight: 600; }
+.folder-row .folder-mark { width: 14px; flex-shrink: 0; }
+.folder-empty { padding: 12px; font-size: 13px; color: var(--text-dim); }

@@ -55,9 +55,17 @@
     <span class="status-dot" id="statusDot" title="OneDrive status"></span>
     <button class="btn" id="signInBtn">Sign in</button>
     <div class="provider-menu hidden" id="providerMenu">
-      <div class="provider-menu-label">Sync with</div>
-      <button class="provider-item" data-provider="onedrive">Microsoft OneDrive</button>
-      <button class="provider-item" data-provider="gdrive">Google Drive</button>
+      <div id="providerConnect">
+        <div class="provider-menu-label">Sync with</div>
+        <button class="provider-item" data-provider="onedrive">Microsoft OneDrive</button>
+        <button class="provider-item" data-provider="gdrive">Google Drive</button>
+      </div>
+      <div id="providerAccount" class="hidden">
+        <div class="provider-menu-label" id="accountLabel"></div>
+        <button class="provider-item" id="chooseFolderBtn">Sync folder: <span id="currentFolderName">Books</span></button>
+        <div class="shelf-menu-sep"></div>
+        <button class="provider-item" id="signOutBtn">Sign out</button>
+      </div>
     </div>
   </div>
 
@@ -162,6 +170,51 @@
       <div class="notes-surface" id="notesSurface">
         <svg class="notes-ink" id="notesInk"></svg>
         <div class="notes-notes" id="notesNotes"></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- One-time setup for a cloud provider: a place to paste the client ID
+       without having to edit a file and redeploy the site. -->
+  <div id="setupOverlay" class="setup-overlay hidden">
+    <div class="setup-card">
+      <h2 id="setupTitle">Connect a drive</h2>
+      <p class="setup-intro" id="setupIntro"></p>
+      <ol class="setup-steps" id="setupSteps"></ol>
+
+      <label class="setup-field">
+        <span>This app's address — paste it where the steps ask for an origin</span>
+        <input type="text" id="setupOrigin" readonly />
+      </label>
+
+      <label class="setup-field">
+        <span id="setupInputLabel">Client ID</span>
+        <input type="text" id="setupClientId" placeholder="Paste the client ID here"
+               autocapitalize="off" autocorrect="off" spellcheck="false" />
+      </label>
+
+      <p class="setup-note" id="setupNote"></p>
+      <div class="setup-actions">
+        <button class="btn" id="setupCancel">Cancel</button>
+        <button class="btn primary" id="setupSave">Save &amp; connect</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Choosing which cloud folder to sync with. On a second device this is
+       how you join the folder the first device already created. -->
+  <div id="folderOverlay" class="setup-overlay hidden">
+    <div class="setup-card">
+      <h2>Sync folder</h2>
+      <p class="setup-intro" id="folderIntro"></p>
+      <div class="folder-list" id="folderList"></div>
+      <label class="setup-field">
+        <span>Or create a new folder</span>
+        <input type="text" id="newFolderName" placeholder="Folder name, e.g. Books" />
+      </label>
+      <div class="setup-actions">
+        <button class="btn" id="folderCancel">Cancel</button>
+        <button class="btn primary" id="folderCreate">Create &amp; use</button>
       </div>
     </div>
   </div>

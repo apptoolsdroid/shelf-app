@@ -13,6 +13,7 @@ import * as msalAuth from "./msalAuth.js";
 import * as googleDrive from "./googleDrive.js";
 
 const PROVIDER_KEY = "shelf.cloudProvider";
+const FOLDER_KEY = "shelf.cloudFolder";
 
 export const PROVIDERS = {
   onedrive: {
@@ -37,6 +38,43 @@ let current = null;
 function remember(name) {
   try { localStorage.setItem(PROVIDER_KEY, name || ""); } catch (_) {}
 }
+
+// ---- Which folder we sync with ---------------------------------------------
+// Remembered per provider, because a Google folder id means nothing to
+// OneDrive and vice versa.
+
+function folderKeyFor(name) {
+  return `${FOLDER_KEY}.${name}`;
+}
+
+export function getFolder() {
+  if (!current) return null;
+  try {
+    const raw = localStorage.getItem(folderKeyFor(current.id));
+    return raw ? JSON.parse(raw) : null;
+  } catch (_) {
+    return null;
+  }
+}
+
+export function setFolder(folder) {
+  if (!current) return;
+  try {
+    if (folder) localStorage.setItem(folderKeyFor(current.id), JSON.stringify(folder));
+    else localStorage.removeItem(folderKeyFor(current.id));
+  } catch (_) { /* nothing to do if storage is blocked */ }
+  applyFolder();
+}
+
+// Push the remembered choice into the provider module, which is what actually
+// reads and writes in it.
+function applyFolder() {
+  if (!current || !current.files.useFolder) return;
+  current.files.useFolder(getFolder());
+}
+
+export const listFolders = () => need().listFolders();
+export const createFolder = (name) => need().createFolder(name);
 
 export function getProviderName() {
   return current ? current.id : null;
@@ -69,6 +107,7 @@ export async function initCloud() {
     // Fall back to whichever provider happens to have a live session.
     current = Object.values(PROVIDERS).find((p) => p.auth.isSignedIn()) || null;
   }
+  applyFolder();
   return current ? current.auth.getAccount() : null;
 }
 
@@ -78,6 +117,7 @@ export async function signIn(name) {
   const account = await provider.auth.signIn();
   current = provider;
   remember(name);
+  applyFolder();
   return account;
 }
 

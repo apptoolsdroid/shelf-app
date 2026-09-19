@@ -24,6 +24,15 @@ let accessToken = null;
 let expiresAt = 0;
 let account = null; // { username }
 let booksFolderId = null;
+let chosenFolder = null; // { id, name } picked by the user, if any
+
+// The app can be pointed at a specific folder rather than always using the
+// default name — that's how a second device joins the folder the first one
+// created.
+export function useFolder(folder) {
+  chosenFolder = folder && folder.id ? folder : null;
+  booksFolderId = chosenFolder ? chosenFolder.id : null;
+}
 
 function loadStoredToken() {
   try {
@@ -171,7 +180,26 @@ async function driveFetch(url, options = {}) {
 
 const q = (s) => encodeURIComponent(s);
 
+export async function listFolders() {
+  const query = "mimeType='application/vnd.google-apps.folder' and trashed=false";
+  const resp = await driveFetch(
+    `${DRIVE}/files?q=${q(query)}&fields=files(id,name,modifiedTime)&pageSize=100&spaces=drive&orderBy=name`
+  );
+  return ((await resp.json()).files || []).map((f) => ({ id: f.id, name: f.name }));
+}
+
+export async function createFolder(name) {
+  const resp = await driveFetch(`${DRIVE}/files?fields=id,name`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ name, mimeType: "application/vnd.google-apps.folder" }),
+  });
+  const f = await resp.json();
+  return { id: f.id, name: f.name };
+}
+
 export async function ensureBooksFolder() {
+  if (chosenFolder) { booksFolderId = chosenFolder.id; return booksFolderId; }
   if (booksFolderId) return booksFolderId;
   const name = CONFIG.booksFolderPath.split("/").pop();
   const query = `mimeType='application/vnd.google-apps.folder' and name='${name.replace(/'/g, "\\'")}' and trashed=false`;

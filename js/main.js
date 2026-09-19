@@ -5,6 +5,7 @@
 // ============================================================================
 import { APP_VERSION } from "./version.js";
 import * as cloud from "./cloud.js";
+import { CONFIG } from "./config.js";
 const { isSignedIn, getAccount } = cloud;
 import * as shelf from "./bookshelf.js";
 import * as annotations from "./annotations.js";
@@ -57,30 +58,213 @@ function toggleProviderMenu(show) {
   el("providerMenu").classList.toggle("hidden", !show);
 }
 
-el("signInBtn").addEventListener("click", async (e) => {
+el("signInBtn").addEventListener("click", (e) => {
   e.stopPropagation();
-  if (cloud.isSignedIn()) {
-    cloud.signOut();
-    toast("Signed out");
-    await refreshSignInUI();
-    return;
+  // The same menu either offers the two drives, or — once connected — the
+  // folder choice and sign-out.
+  const connected = cloud.isSignedIn();
+  el("providerConnect").classList.toggle("hidden", connected);
+  el("providerAccount").classList.toggle("hidden", !connected);
+  if (connected) {
+    const acc = cloud.getAccount() || {};
+    el("accountLabel").textContent = `${cloud.getProviderLabel()} · ${acc.username || "connected"}`;
+    const folder = cloud.getFolder();
+    el("currentFolderName").textContent = folder ? folder.name : CONFIG.booksFolderPath;
   }
-  // Two drives to choose from now, so signing in asks which one.
   toggleProviderMenu(el("providerMenu").classList.contains("hidden"));
 });
 
-for (const item of document.querySelectorAll(".provider-item")) {
+el("signOutBtn").addEventListener("click", async (e) => {
+  e.stopPropagation();
+  toggleProviderMenu(false);
+  cloud.signOut();
+  toast("Signed out");
+  await refreshSignInUI();
+});
+
+// ---- Picking the folder to sync with ---------------------------------------
+// Two devices only share a library if they point at the same folder. The first
+// device creates one; the second picks it from this list.
+
+async function openFolderPicker() {
+  el("folderIntro").textContent =
+    `Choose which folder in your ${cloud.getProviderLabel()} this device syncs with. ` +
+    "Pick the same folder on every device to share the same books and shelves.";
+  el("folderList").innerHTML = '<div class="folder-empty">Loading folders…</div>';
+  el("newFolderName").value = "";
+  el("folderOverlay").classList.remove("hidden");
+
+  let folders = [];
+  try {
+    folders = await cloud.listFolders();
+  } catch (err) {
+    el("folderList").innerHTML = `<div class="folder-empty">Couldn't list folders: ${escapeHtml(err.message)}</div>`;
+    return;
+  }
+
+  const currentFolder = cloud.getFolder();
+  if (folders.length === 0) {
+    el("folderList").innerHTML =
+      '<div class="folder-empty">No folders this app can see yet — create one below.</div>';
+    return;
+  }
+
+  el("folderList").innerHTML = "";
+  for (const f of folders) {
+    const isCurrent = currentFolder ? currentFolder.id === f.id : f.name === CONFIG.booksFolderPath;
+    const row = document.createElement("button");
+    row.className = "folder-row" + (isCurrent ? " current" : "");
+    row.innerHTML = `<span class="folder-mark">${isCurrent ? "✓" : ""}</span>${escapeHtml(f.name)}`;
+    row.addEventListener("click", async () => {
+      cloud.setFolder(f);
+      el("folderOverlay").classList.add("hidden");
+      toast(`Syncing with "${f.name}"`);
+      await syncNow();
+    });
+    el("folderList").appendChild(row);
+  }
+}
+
+el("chooseFolderBtn").addEventListener("click", async (e) => {
+  e.stopPropagation();
+  toggleProviderMenu(false);
+  await openFolderPicker();
+});
+
+el("folderCancel").addEventListener("click", () => el("folderOverlay").classList.add("hidden"));
+
+el("folderCreate").addEventListener("click", async () => {
+  const name = el("newFolderName").value.trim();
+  if (!name) { toast("Give the folder a name first"); return; }
+  try {
+    const folder = await cloud.createFolder(name);
+    cloud.setFolder(folder);
+    el("folderOverlay").classList.add("hidden");
+    toast(`Created "${folder.name}" and syncing with it`);
+    await syncNow();
+  } catch (err) {
+    toast(`Couldn't create folder: ${err.message}`);
+  }
+});
+
+
+// ---- One-time cloud setup --------------------------------------------------
+// Both Google and Microsoft require an app to identify itself with a client ID
+// before they'll let it touch your files; there's no way round registering one.
+// What we can avoid is making you edit a file and redeploy the site, so the ID
+// is pasted here and kept on the device.
+
+const SETUP_COPY = {
+  gdrive: {
+    title: "Connect Google Drive",
+    storageKey: "shelf.googleClientId",
+    inputLabel: "Google OAuth client ID",
+    intro: "Google needs this app registered before it will hand over access to your Drive. " +
+           "It's free and takes about five minutes, and you only do it once.",
+    steps: [
+      'Open <a href="https://console.cloud.google.com" target="_blank" rel="noopener">console.cloud.google.com</a> and create a project.',
+      'In <strong>APIs &amp; Services → Library</strong>, enable the <strong>Google Drive API</strong>.',
+      'In <strong>OAuth consent screen</strong>, choose <strong>External</strong>, fill in a name and your email, and add your own Google account under <strong>Test users</strong>.',
+      'In <strong>Credentials → Create credentials → OAuth client ID</strong>, pick <strong>Web application</strong> and add the address below under <strong>Authorised JavaScript origins</strong>.',
+      "Copy the client ID it gives you and paste it below.",
+    ],
+    note: "Your Google password and two-factor code are entered on Google's own sign-in page — " +
+          "this app never sees them. Once connected it creates a Books folder in your Drive and " +
+          "syncs to it, while still keeping every book on this device for offline reading.",
+  },
+  onedrive: {
+    title: "Connect Microsoft OneDrive",
+    storageKey: "shelf.msClientId",
+    inputLabel: "Azure application (client) ID",
+    intro: "Microsoft needs this app registered before it will hand over access to your OneDrive. " +
+           "It's free and takes about five minutes, and you only do it once.",
+    steps: [
+      'Open <a href="https://portal.azure.com" target="_blank" rel="noopener">portal.azure.com</a> → <strong>App registrations</strong> → <strong>New registration</strong>.',
+      'Choose <strong>Personal Microsoft accounts only</strong> (or the option that also allows work accounts).',
+      'Under <strong>Authentication → Add a platform → Single-page application</strong>, add the address below as the redirect URI.',
+      'Under <strong>API permissions</strong>, add Microsoft Graph → delegated → <strong>Files.ReadWrite</strong>.',
+      "Copy the Application (client) ID from the Overview page and paste it below.",
+    ],
+    note: "Your Microsoft password and two-factor code are entered on Microsoft's own sign-in page — " +
+          "this app never sees them. Once connected it creates a Books folder in your OneDrive and " +
+          "syncs to it, while still keeping every book on this device for offline reading.",
+  },
+};
+
+let setupProvider = null;
+
+function needsSetup(name) {
+  const key = SETUP_COPY[name].storageKey;
+  let stored = null;
+  try { stored = localStorage.getItem(key); } catch (_) {}
+  if (stored && stored.trim()) return false;
+  // Nothing saved in the app — fall back to whatever is in config.js, which
+  // still holds the placeholder until someone edits it.
+  const fromFile = name === "gdrive" ? CONFIG.google.clientId : CONFIG.clientId;
+  return !fromFile || fromFile.startsWith("PASTE-");
+}
+
+function openSetup(name) {
+  setupProvider = name;
+  const copy = SETUP_COPY[name];
+  el("setupTitle").textContent = copy.title;
+  el("setupIntro").textContent = copy.intro;
+  el("setupSteps").innerHTML = copy.steps.map((s) => `<li>${s}</li>`).join("");
+  el("setupInputLabel").textContent = copy.inputLabel;
+  el("setupNote").textContent = copy.note;
+  // The exact origin to register. Getting this wrong is the single most common
+  // reason sign-in fails, so it's shown rather than described.
+  el("setupOrigin").value = name === "gdrive"
+    ? window.location.origin
+    : window.location.href.replace(/index\.html$/, "").split("#")[0].split("?")[0];
+  let existing = "";
+  try { existing = localStorage.getItem(copy.storageKey) || ""; } catch (_) {}
+  el("setupClientId").value = existing;
+  el("setupOverlay").classList.remove("hidden");
+  setTimeout(() => el("setupClientId").focus(), 50);
+}
+
+function closeSetup() {
+  el("setupOverlay").classList.add("hidden");
+  setupProvider = null;
+}
+
+el("setupCancel").addEventListener("click", closeSetup);
+el("setupOrigin").addEventListener("click", (e) => e.target.select());
+
+el("setupSave").addEventListener("click", async () => {
+  const name = setupProvider;
+  const value = el("setupClientId").value.trim();
+  if (!value) { toast("Paste the client ID first"); return; }
+  try {
+    localStorage.setItem(SETUP_COPY[name].storageKey, value);
+  } catch (_) {
+    toast("This browser won't let the app save settings");
+    return;
+  }
+  closeSetup();
+  await connectProvider(name);
+});
+
+async function connectProvider(name) {
+  if (needsSetup(name)) { openSetup(name); return; }
+  try {
+    await cloud.signIn(name);
+    toast(`Connected to ${cloud.getProviderLabel()}`);
+  } catch (err) {
+    toast(err.message);
+  }
+  await refreshSignInUI();
+}
+
+// Only the rows that actually name a provider — "Sync folder" and "Sign out"
+// share this class for styling but have their own handlers, and would
+// otherwise try to connect to a provider called `undefined`.
+for (const item of document.querySelectorAll(".provider-item[data-provider]")) {
   item.addEventListener("click", async (e) => {
     e.stopPropagation();
-    const name = item.dataset.provider;
     toggleProviderMenu(false);
-    try {
-      await cloud.signIn(name);
-      toast(`Connected to ${cloud.getProviderLabel()}`);
-    } catch (err) {
-      toast(err.message);
-    }
-    await refreshSignInUI();
+    await connectProvider(item.dataset.provider);
   });
 }
 
@@ -88,12 +272,12 @@ document.addEventListener("click", () => toggleProviderMenu(false));
 
 // ---- Bookshelf: rail of shelves + the open shelf's panel --------------------
 
-el("syncBtn").addEventListener("click", async () => {
-  if (!isSignedIn()) {
+async function syncNow() {
+  if (!cloud.isSignedIn()) {
     toast("Connect a cloud drive first.");
     return;
   }
-  toast("Syncing with OneDrive...");
+  toast(`Syncing with ${cloud.getProviderLabel()}…`);
   try {
     const result = await shelf.syncFromOneDrive();
     const up = result.uploaded ? `, uploaded ${result.uploaded}` : "";
@@ -102,7 +286,9 @@ el("syncBtn").addEventListener("click", async () => {
   } catch (err) {
     toast(`Sync failed: ${err.message}`);
   }
-});
+}
+
+el("syncBtn").addEventListener("click", syncNow);
 
 el("localFileInput").addEventListener("change", async (e) => {
   let added = 0;
