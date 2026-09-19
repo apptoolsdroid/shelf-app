@@ -1,0 +1,94 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, maximum-scale=1" />
+<title>Shelf</title>
+<link rel="manifest" href="manifest.json" />
+<link rel="apple-touch-icon" href="icons/icon-192.png" />
+<meta name="apple-mobile-web-app-capable" content="yes" />
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+<meta name="theme-color" content="#1e293b" />
+<link rel="stylesheet" href="css/style.css" />
+
+<!-- Microsoft sign-in -->
+<script src="https://alcdn.msauth.net/browser/2.38.3/js/msal-browser.min.js"></script>
+<!-- EPUB rendering -->
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/epubjs/0.3.93/epub.min.js"></script>
+<!-- PDF rendering -->
+<script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/4.0.379/pdf.min.js"></script>
+<script>
+  pdfjsLib.GlobalWorkerOptions.workerSrc = "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/4.0.379/pdf.worker.min.js";
+</script>
+</head>
+<body>
+<div id="app">
+  <div class="topbar">
+    <h1 id="titleText">Shelf</h1>
+    <span class="status-dot" id="statusDot" title="OneDrive status"></span>
+    <button class="btn" id="signInBtn">Sign in</button>
+  </div>
+
+  <div id="shelfView">
+    <div class="shelf-actions">
+      <button class="btn primary" id="syncBtn">Sync OneDrive</button>
+      <label class="btn" for="localFileInput">Import file...</label>
+      <input type="file" id="localFileInput" accept=".epub,.pdf" class="hidden" multiple />
+    </div>
+    <div class="library">
+      <div class="shelf-rail" id="shelfRail"></div>
+      <div class="shelf-panel" id="shelfPanel">
+        <div class="empty-state" id="emptyState">
+          No books yet. Sign in and tap <strong>Sync OneDrive</strong> to pull everything from your
+          OneDrive <em>Books</em> folder, or use <strong>Import file</strong> to add an EPUB/PDF from this device.
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div id="readerView">
+    <div class="reader-toolbar">
+      <button class="btn icon" id="backBtn">‹ Shelf</button>
+      <button class="btn icon" id="undoBtn" title="Undo">↺</button>
+      <button class="btn icon" id="redoBtn" title="Redo">↻</button>
+      <button class="btn icon" id="bookmarkBtn" title="Bookmark this spot">🔖</button>
+
+      <select id="pdfViewModeSelect" class="btn hidden" title="Page view">
+        <option value="single">Single page</option>
+        <option value="double">Two pages (book)</option>
+        <option value="scroll">Continuous scroll</option>
+      </select>
+      <button class="btn icon pdf-only hidden" id="prevArrowBtn" title="Previous page(s)">‹</button>
+      <button class="btn icon pdf-only hidden" id="nextArrowBtn" title="Next page(s)">›</button>
+
+      <span class="spacer"></span>
+      <span id="pageInfo" class="book-sub"></span>
+      <span class="spacer"></span>
+
+      <button class="btn icon" id="fontMinusBtn">A-</button>
+      <button class="btn icon" id="fontPlusBtn">A+</button>
+      <button class="btn icon pdf-only hidden" id="zoomOutBtn" title="Zoom out">−</button>
+      <button class="btn icon pdf-only hidden" id="zoomFitBtn" title="Fit to screen">Fit</button>
+      <button class="btn icon pdf-only hidden" id="zoomInBtn" title="Zoom in">+</button>
+
+      <button class="btn primary" id="saveBtn">Save</button>
+    </div>
+    <div id="readerContainer">
+      <div id="epubContainer" class="hidden"></div>
+      <div id="pdfContainer" class="hidden"></div>
+    </div>
+    <div id="readerMorphSurface" class="reader-morph-surface hidden">Opening…</div>
+  </div>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script type="module" src="js/main.js"></script>
+<script>
+  if ("serviceWorker" in navigator) {
+    window.addEventListener("load", () => navigator.serviceWorker.register("sw.js").catch(() => {}));
+  }
+</script>
+</body>
+</html>
