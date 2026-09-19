@@ -4,11 +4,13 @@
 // (EPUB or PDF) together, and drives the toolbar (undo/redo/bookmark/save).
 // ============================================================================
 import { APP_VERSION } from "./version.js";
-import { initAuth, isSignedIn, signIn, signOut, getAccount } from "./msalAuth.js";
+import * as cloud from "./cloud.js";
+const { isSignedIn, getAccount } = cloud;
 import * as shelf from "./bookshelf.js";
 import * as annotations from "./annotations.js";
 import * as epubReader from "./readerEpub.js";
 import * as pdfReader from "./readerPdf.js";
+import * as notes from "./notes.js";
 
 const el = (id) => document.getElementById(id);
 const shelfView = el("shelfView");
@@ -38,41 +40,64 @@ function escapeHtml(s) {
 async function refreshSignInUI() {
   const btn = el("signInBtn");
   const dot = el("statusDot");
-  if (isSignedIn()) {
-    const acc = getAccount();
-    btn.textContent = `Sign out (${(acc.username || "").split("@")[0]})`;
+  if (cloud.isSignedIn()) {
+    const acc = cloud.getAccount() || {};
+    const who = (acc.username || "").split("@")[0];
+    btn.textContent = `Sign out${who ? ` (${who})` : ""}`;
+    btn.title = `Connected to ${cloud.getProviderLabel()}`;
     dot.classList.add("online");
   } else {
     btn.textContent = "Sign in";
+    btn.title = "Connect OneDrive or Google Drive";
     dot.classList.remove("online");
   }
 }
 
-el("signInBtn").addEventListener("click", async () => {
-  try {
-    if (isSignedIn()) {
-      signOut();
-    } else {
-      await signIn();
-      toast("Signed in to Microsoft");
-    }
-  } catch (err) {
-    toast(err.message);
+function toggleProviderMenu(show) {
+  el("providerMenu").classList.toggle("hidden", !show);
+}
+
+el("signInBtn").addEventListener("click", async (e) => {
+  e.stopPropagation();
+  if (cloud.isSignedIn()) {
+    cloud.signOut();
+    toast("Signed out");
+    await refreshSignInUI();
+    return;
   }
-  await refreshSignInUI();
+  // Two drives to choose from now, so signing in asks which one.
+  toggleProviderMenu(el("providerMenu").classList.contains("hidden"));
 });
+
+for (const item of document.querySelectorAll(".provider-item")) {
+  item.addEventListener("click", async (e) => {
+    e.stopPropagation();
+    const name = item.dataset.provider;
+    toggleProviderMenu(false);
+    try {
+      await cloud.signIn(name);
+      toast(`Connected to ${cloud.getProviderLabel()}`);
+    } catch (err) {
+      toast(err.message);
+    }
+    await refreshSignInUI();
+  });
+}
+
+document.addEventListener("click", () => toggleProviderMenu(false));
 
 // ---- Bookshelf: rail of shelves + the open shelf's panel --------------------
 
 el("syncBtn").addEventListener("click", async () => {
   if (!isSignedIn()) {
-    toast("Sign in to Microsoft first.");
+    toast("Connect a cloud drive first.");
     return;
   }
   toast("Syncing with OneDrive...");
   try {
     const result = await shelf.syncFromOneDrive();
-    toast(`Synced ${result.count} book(s) from OneDrive`);
+    const up = result.uploaded ? `, uploaded ${result.uploaded}` : "";
+    toast(`Synced ${result.count} book(s) from ${cloud.getProviderLabel()}${up}`);
     await renderLibrary();
   } catch (err) {
     toast(`Sync failed: ${err.message}`);
@@ -94,9 +119,51 @@ el("localFileInput").addEventListener("change", async (e) => {
   e.target.value = "";
 });
 
+// Import a whole folder as its own shelf. Where the browser supports picking a
+// directory (Android Chrome, desktop) the shelf is named after the folder. iOS
+// Safari ignores the directory attribute and shows a normal multi-select picker
+// instead, so the same button still works there — the shelf just gets a dated
+// name, and you can refile books from any cover's ⋯ menu.
+el("folderInput").addEventListener("change", async (e) => {
+  const files = [...e.target.files].filter((f) => /\.(epub|pdf)$/i.test(f.name));
+  if (files.length === 0) {
+    toast("No EPUB or PDF files found in that selection");
+    e.target.value = "";
+    return;
+  }
+
+  const relPath = files[0].webkitRelativePath || "";
+  const folderName = relPath.includes("/") ? relPath.split("/")[0] : "";
+  const shelfName = folderName || `Imported ${new Date().toLocaleDateString()}`;
+
+  toast(`Importing ${files.length} book${files.length === 1 ? "" : "s"}…`);
+  const ids = [];
+  let added = 0;
+  let skipped = 0;
+  for (const file of files) {
+    const result = await shelf.importLocalFile(file);
+    ids.push(result.meta.id);
+    result.duplicate ? skipped++ : added++;
+  }
+
+  // Books already on the shelf still get filed into the new category — being a
+  // duplicate shouldn't stop it appearing where you asked for it.
+  const shelfId = await shelf.createCustomShelf(shelfName);
+  for (const id of ids) await shelf.toggleBookInCustomShelf(shelfId, id);
+
+  expandedShelfId = shelfId;
+  browseMode = "shelf";
+  await renderLibrary();
+  toast(`"${shelfName}": ${added} added${skipped ? `, ${skipped} already had` : ""}`);
+  e.target.value = "";
+});
+
 // Fetches the current shelves and (re)draws the rail + open panel. Call this
 // whenever the underlying data changed (import, sync, shelf create/delete,
 // a book added to/removed from a shelf).
+// "racks" = the room, every category as a bookcase. "shelf" = inside one.
+let browseMode = "racks";
+
 async function renderLibrary() {
   const shelves = await shelf.listAllShelves();
   if (!expandedShelfId || !shelves.some((s) => s.id === expandedShelfId)) {
@@ -105,13 +172,131 @@ async function renderLibrary() {
       ? continueReading.id
       : (shelves[0] ? shelves[0].id : null);
   }
+  renderRacks(shelves);
   renderRail(shelves);
   renderPanel(shelves);
+  el("racksView").classList.toggle("hidden", browseMode !== "racks");
+  el("libraryView").classList.toggle("hidden", browseMode !== "shelf");
+}
+
+// Spine looks are derived from the title, so a given book always gets the same
+// colour and height — the racks stay recognisable between visits instead of
+// reshuffling every render.
+const SPINE_COLORS = [
+  "#7a2f2a", "#2f4a34", "#2b3a5c", "#6b4a1f", "#4a2b4e",
+  "#8a5a22", "#35504f", "#5c2733", "#3d3b2a", "#264653",
+];
+
+function spineStyle(book, i) {
+  let h = 0;
+  const key = `${book.title || ""}${book.id || ""}`;
+  for (let c = 0; c < key.length; c++) h = (h * 31 + key.charCodeAt(c)) >>> 0;
+  const color = SPINE_COLORS[h % SPINE_COLORS.length];
+  const height = 74 + (h % 4) * 6;       // 74–92% of the shelf height
+  const width = 17 + ((h >> 3) % 5) * 4; // 17–33px, the proportions of a real spine
+  return `--c:${color}; --h:${height}%; --w:${width}px;`;
+}
+
+// A spine has room for a few characters at most, so this trims the title down
+// to something recognisable rather than trying to show all of it: drop a
+// leading article, then cut to a length that actually fits standing up.
+function spineLabel(title) {
+  // Underscores become spaces first — filenames use them as word separators, and
+  // leaving them in means the leading-article strip below never matches on a
+  // title like "The_Long_Road".
+  const t = String(title || "")
+    .replace(/\.(epub|pdf)$/i, "")
+    .replace(/[_]+/g, " ")
+    .replace(/^(the|a|an)\s+/i, "")
+    .trim();
+  return t.length > 11 ? `${t.slice(0, 10)}…` : t;
+}
+
+function renderRacks(shelves) {
+  const grid = el("racksGrid");
+  grid.innerHTML = "";
+
+  const totalBooks = shelves.reduce((n, s) => n + s.books.length, 0);
+  if (totalBooks === 0) {
+    grid.innerHTML = `<div class="empty-state">
+      No books yet. Use the import buttons in the header to add EPUBs and PDFs from this
+      device, or sign in and tap the cloud to sync your OneDrive.
+    </div>`;
+    return;
+  }
+
+  for (const s of shelves) {
+    const rack = document.createElement("div");
+    rack.className = "rack" + (s.id === expandedShelfId ? " active" : "");
+    rack.dataset.shelfId = s.id;
+
+    // Two boards per case, with the category's books spread across them.
+    const shown = s.books.slice(0, 12);
+    const perRow = 6;
+    const rows = [shown.slice(0, perRow), shown.slice(perRow)];
+
+    const boards = rows.map((row) => {
+      // Each spine is its own button: pulling a single book off the shelf
+      // should open that book, not the category it happens to sit in.
+      const spines = row.map((bk) =>
+        `<button class="spine" style="${spineStyle(bk)}" data-book-id="${escapeHtml(bk.id)}"
+           title="${escapeHtml(bk.title)}" aria-label="Open ${escapeHtml(bk.title)}"><i>${escapeHtml(spineLabel(bk.title))}</i></button>`
+      ).join("");
+      return `
+        <div class="rack-shelf">
+          <div class="rack-books">${spines}</div>
+          <div class="rack-board"></div>
+        </div>`;
+    }).join("");
+
+    rack.innerHTML = `
+      <div class="rack-case">${boards}</div>
+      <button class="rack-plate" aria-label="Open the ${escapeHtml(s.name)} shelf">
+        ${escapeHtml(s.name)}
+        <span class="rack-count">${s.books.length}</span>
+      </button>
+    `;
+
+    // A spine opens its book, straight back to wherever you stopped reading.
+    for (const spineEl of rack.querySelectorAll(".spine")) {
+      const book = s.books.find((bk) => bk.id === spineEl.dataset.bookId);
+      if (!book) continue;
+      spineEl.addEventListener("click", (e) => {
+        e.stopPropagation(); // don't also open the shelf behind it
+        openBook(book, spineEl);
+      });
+    }
+
+    // The case itself, and the brass plate under it, open the category.
+    rack.querySelector(".rack-case").addEventListener("click", () => openRack(s.id));
+    rack.querySelector(".rack-plate").addEventListener("click", () => openRack(s.id));
+    grid.appendChild(rack);
+  }
+}
+
+function openRack(shelfId) {
+  expandedShelfId = shelfId;
+  browseMode = "shelf";
+  renderLibrary();
+}
+
+function backToRacks() {
+  browseMode = "racks";
+  renderLibrary();
 }
 
 function renderRail(shelves) {
   const rail = el("shelfRail");
   rail.innerHTML = "";
+
+  // Way back out to the room. First in the rail so it's always in the same
+  // place, whichever category you're in.
+  const back = document.createElement("button");
+  back.className = "shelf-tab-back";
+  back.textContent = "‹ All racks";
+  back.addEventListener("click", backToRacks);
+  rail.appendChild(back);
+
   for (const s of shelves) {
     const tab = document.createElement("div");
     tab.className = "shelf-tab" + (s.id === expandedShelfId ? " active" : "");
@@ -359,6 +544,7 @@ function showReaderShell(meta) {
   el("titleText").textContent = meta.title;
 
   shelfView.classList.add("hidden");
+  document.body.classList.add("reading");
   readerView.classList.add("active");
   el("epubContainer").classList.add("hidden");
   el("pdfContainer").classList.add("hidden");
@@ -457,6 +643,9 @@ async function closeBook() {
   if (annotations.isDirty() && isSignedIn()) {
     await annotations.saveToOneDrive(currentBookMeta).catch(() => {});
   }
+  closeNotes();
+  pdfReader.setInkTool(false);
+  refreshInkButtons();
   const closedBookId = currentBookMeta ? currentBookMeta.id : null;
   if (currentFormat === "epub") epubReader.destroy();
   if (currentFormat === "pdf") pdfReader.destroy();
@@ -467,10 +656,12 @@ async function closeBook() {
     if (!expandedShelfId || !shelves.some((s) => s.id === expandedShelfId)) {
       expandedShelfId = shelves[0] ? shelves[0].id : null;
     }
+    renderRacks(shelves);
     renderRail(shelves);
     renderPanel(shelves);
     readerView.classList.remove("active");
     document.body.classList.remove("immersive");
+    document.body.classList.remove("reading");
     shelfView.classList.remove("hidden");
     el("pageArrowPrev").hidden = true;
     el("pageArrowNext").hidden = true;
@@ -509,6 +700,7 @@ window.addEventListener("unhandledrejection", (e) => {
 // (only meaningful in single/double page mode — scroll mode is scrolled).
 el("pdfContainer") && el("pdfContainer").addEventListener("click", (e) => {
   if (currentFormat !== "pdf") return;
+  if (pdfReader.isInking()) return; // the pen owns the page right now
   if (pdfReader.getViewMode() === "scroll") { toggleImmersive(); return; }
   const rect = el("pdfContainer").getBoundingClientRect();
   const x = e.clientX - rect.left;
@@ -537,7 +729,8 @@ el("pageArrowNext").addEventListener("click", (e) => { e.stopPropagation(); turn
 // would be lying about what they do.
 function updatePageArrows() {
   const scrollMode = currentFormat === "pdf" && pdfReader.getViewMode() === "scroll";
-  const show = !!currentFormat && !scrollMode;
+  const inking = currentFormat === "pdf" && pdfReader.isInking();
+  const show = !!currentFormat && !scrollMode && !inking;
   el("pageArrowPrev").hidden = !show;
   el("pageArrowNext").hidden = !show;
 }
@@ -592,6 +785,69 @@ el("epubContainer") && el("epubContainer").addEventListener("click", (e) => {
   else if (x > rect.width * 0.8) epubReader.nextPage();
 });
 
+
+// ---- Ink on the page, and the notes canvas ---------------------------------
+
+const INK_BUTTONS = { pen: "penBtn", highlighter: "hiliteBtn", eraser: "eraserBtn" };
+
+function refreshInkButtons() {
+  const active = pdfReader.getInkTool();
+  for (const [tool, id] of Object.entries(INK_BUTTONS)) {
+    el(id).classList.toggle("tool-active", active === tool);
+  }
+  document.body.classList.toggle("inking", !!active);
+  updatePageArrows();
+}
+
+// Tapping the active tool again puts the pen down and hands the page back to
+// text selection and page turning.
+function chooseInkTool(tool) {
+  pdfReader.setInkTool(pdfReader.getInkTool() === tool ? false : tool);
+  refreshInkButtons();
+}
+
+el("penBtn").addEventListener("click", () => chooseInkTool("pen"));
+el("hiliteBtn").addEventListener("click", () => chooseInkTool("highlighter"));
+el("eraserBtn").addEventListener("click", () => chooseInkTool("eraser"));
+el("inkColor").addEventListener("input", (e) => pdfReader.setInkColor(e.target.value));
+
+const NOTE_BUTTONS = { pen: "nPenBtn", highlighter: "nHiliteBtn", eraser: "nEraserBtn", note: "nNoteBtn" };
+
+function refreshNoteButtons() {
+  for (const [tool, id] of Object.entries(NOTE_BUTTONS)) {
+    el(id).classList.toggle("tool-active", notes.getTool() === tool);
+  }
+}
+
+function chooseNoteTool(tool) {
+  notes.setTool(tool);
+  refreshNoteButtons();
+}
+
+for (const [tool, id] of Object.entries(NOTE_BUTTONS)) {
+  el(id).addEventListener("click", () => chooseNoteTool(tool));
+}
+el("nInkColor").addEventListener("input", (e) => notes.setColor(e.target.value));
+
+function openNotes() {
+  if (!currentBookMeta) return;
+  notes.init({ board: el("notesBoard"), svg: el("notesInk"), notes: el("notesNotes") });
+  notes.render();
+  refreshNoteButtons();
+  el("notesHint").textContent = notes.isEmpty()
+    ? "Scribble, or tap 🗒️ then the board to drop a note"
+    : currentBookMeta.title;
+  el("notesView").classList.add("active");
+}
+
+function closeNotes() {
+  el("notesView").classList.remove("active");
+}
+
+el("notesBtn").addEventListener("click", openNotes);
+el("notesCloseBtn").addEventListener("click", closeNotes);
+el("notesSaveBtn").addEventListener("click", () => el("saveBtn").click());
+
 // ---- Toolbar: undo / redo / bookmark / font / save --------------------------
 
 el("undoBtn").addEventListener("click", () => annotations.undo());
@@ -626,6 +882,8 @@ el("saveBtn").addEventListener("click", async () => {
 });
 
 annotations.onChange((state) => {
+  if (el("notesView").classList.contains("active")) notes.render();
+  if (currentFormat === "pdf") pdfReader.refreshInk();
   el("undoBtn").disabled = !state.canUndo;
   el("redoBtn").disabled = !state.canRedo;
   el("statusDot").classList.toggle("dirty", state.dirty);
@@ -655,9 +913,9 @@ el("versionChip").addEventListener("click", async () => {
 
 (async function boot() {
   try {
-    await initAuth();
+    await cloud.initCloud();
   } catch (err) {
-    console.warn("Auth init skipped:", err.message);
+    console.warn("Cloud init skipped:", err.message);
   }
   await refreshSignInUI();
   await renderLibrary();

@@ -25,23 +25,55 @@
 <div id="app">
   <div class="topbar">
     <h1 id="titleText">Shelf</h1>
+    <!-- The three library actions live in the header itself, so there's only
+         one bar across the top instead of two stacked ones. -->
+    <div class="lib-actions" id="libActions">
+      <button class="icon-btn" id="syncBtn" title="Sync with OneDrive" aria-label="Sync with OneDrive">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M7 13.5a3.5 3.5 0 0 1 .5-7 5 5 0 0 1 9.6 1.4A3 3 0 0 1 17 13.5"/>
+          <path d="M12 11v8M12 19l2.6-2.6M12 19l-2.6-2.6"/>
+        </svg>
+      </button>
+      <label class="icon-btn" for="localFileInput" title="Import books from this device" aria-label="Import books">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/>
+          <path d="M14 3v5h5"/>
+          <path d="M12 12.5v5M9.5 15h5"/>
+        </svg>
+      </label>
+      <input type="file" id="localFileInput" accept=".epub,.pdf" class="hidden" multiple />
+      <label class="icon-btn" for="folderInput" title="Import a folder as its own shelf" aria-label="Import folder as new shelf">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M3 7.5A1.5 1.5 0 0 1 4.5 6h4L11 8h8.5A1.5 1.5 0 0 1 21 9.5v8A1.5 1.5 0 0 1 19.5 19h-15A1.5 1.5 0 0 1 3 17.5z"/>
+          <path d="M12 11v5M9.5 13.5h5"/>
+        </svg>
+      </label>
+      <input type="file" id="folderInput" class="hidden" multiple webkitdirectory directory />
+    </div>
+    <span class="spacer"></span>
     <button class="version-chip" id="versionChip" title="App version — tap to check for updates">v—</button>
     <span class="status-dot" id="statusDot" title="OneDrive status"></span>
     <button class="btn" id="signInBtn">Sign in</button>
+    <div class="provider-menu hidden" id="providerMenu">
+      <div class="provider-menu-label">Sync with</div>
+      <button class="provider-item" data-provider="onedrive">Microsoft OneDrive</button>
+      <button class="provider-item" data-provider="gdrive">Google Drive</button>
+    </div>
   </div>
 
   <div id="shelfView">
-    <div class="shelf-actions">
-      <button class="btn primary" id="syncBtn">Sync OneDrive</button>
-      <label class="btn" for="localFileInput">Import file...</label>
-      <input type="file" id="localFileInput" accept=".epub,.pdf" class="hidden" multiple />
+    <!-- Entry screen: the room. Every category is a bookcase you can walk up
+         to; clicking one opens that category's shelf below. -->
+    <div id="racksView">
+      <div class="racks-grid" id="racksGrid"></div>
     </div>
-    <div class="library">
+
+    <div class="library hidden" id="libraryView">
       <div class="shelf-rail" id="shelfRail"></div>
       <div class="shelf-panel" id="shelfPanel">
         <div class="empty-state" id="emptyState">
-          No books yet. Sign in and tap <strong>Sync OneDrive</strong> to pull everything from your
-          OneDrive <em>Books</em> folder, or use <strong>Import file</strong> to add an EPUB/PDF from this device.
+          No books yet. Use the import buttons in the header to add EPUBs and PDFs from this device,
+          or sign in and tap the cloud to pull them from your OneDrive <em>Books</em> folder.
         </div>
       </div>
     </div>
@@ -53,6 +85,19 @@
       <button class="btn icon" id="undoBtn" title="Undo">↺</button>
       <button class="btn icon" id="redoBtn" title="Redo">↻</button>
       <button class="btn icon" id="bookmarkBtn" title="Bookmark this spot">🔖</button>
+      <button class="btn icon" id="notesBtn" title="Notes canvas for this book" aria-label="Notes canvas">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M4 5.5A1.5 1.5 0 0 1 5.5 4H18a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2H5.5A1.5 1.5 0 0 1 4 18.5z"/>
+          <path d="M8 4v16M11 9h6M11 13h4"/>
+        </svg>
+      </button>
+
+      <span class="ink-tools pdf-only hidden" id="inkTools">
+        <button class="btn icon" id="penBtn" title="Draw with the pen">✏️</button>
+        <button class="btn icon" id="hiliteBtn" title="Highlighter">🖍️</button>
+        <button class="btn icon" id="eraserBtn" title="Erase ink">🧽</button>
+        <input type="color" id="inkColor" class="ink-color" value="#c0392b" title="Ink colour" />
+      </span>
 
       <select id="pdfViewModeSelect" class="btn hidden" title="Page view">
         <option value="single">Single page</option>
@@ -95,6 +140,31 @@
     </div>
   </div>
 </div>
+
+  <!-- Notes canvas: a board per book, for working ideas out rather than
+       marking up a page. Opened from the reader toolbar. -->
+  <div id="notesView">
+    <div class="reader-toolbar">
+      <button class="btn icon" id="notesCloseBtn">‹ Back to book</button>
+      <span class="ink-tools">
+        <button class="btn icon" id="nPenBtn" title="Pen">✏️</button>
+        <button class="btn icon" id="nHiliteBtn" title="Highlighter">🖍️</button>
+        <button class="btn icon" id="nEraserBtn" title="Erase">🧽</button>
+        <button class="btn icon" id="nNoteBtn" title="Place a typed note">🗒️</button>
+        <input type="color" id="nInkColor" class="ink-color" value="#1c1c1c" title="Ink colour" />
+      </span>
+      <span class="spacer"></span>
+      <span id="notesHint" class="book-sub"></span>
+      <span class="spacer"></span>
+      <button class="btn primary" id="notesSaveBtn">Save</button>
+    </div>
+    <div class="notes-board" id="notesBoard">
+      <div class="notes-surface" id="notesSurface">
+        <svg class="notes-ink" id="notesInk"></svg>
+        <div class="notes-notes" id="notesNotes"></div>
+      </div>
+    </div>
+  </div>
 
 <div class="toast" id="toast"></div>
 

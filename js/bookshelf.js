@@ -5,8 +5,8 @@
 // same local cache (js/db.js) — the reader doesn't care which.
 // ============================================================================
 import * as db from "./db.js";
-import * as oneDrive from "./oneDrive.js";
-import { isSignedIn } from "./msalAuth.js";
+import * as cloud from "./cloud.js";
+const isSignedIn = () => cloud.isSignedIn();
 
 function guessFormat(name) {
   return name.toLowerCase().endsWith(".pdf") ? "pdf" : "epub";
@@ -14,6 +14,17 @@ function guessFormat(name) {
 
 function idForOneDriveItem(itemId) {
   return `od_${itemId}`;
+}
+
+function idForCloudItem(provider, itemId) {
+  return provider === "gdrive" ? `gd_${itemId}` : `od_${itemId}`;
+}
+
+// The name a local book takes in the cloud folder. Keeping the original
+// filename means the copy is recognisable if you ever open the folder itself.
+function cloudFileName(meta) {
+  const ext = meta.format === "pdf" ? ".pdf" : ".epub";
+  return meta.title.endsWith(ext) ? meta.title : `${meta.title}${ext}`;
 }
 
 // Deterministic on purpose: importing the same file twice produces the same
@@ -29,16 +40,25 @@ function idForLocalFile(name, size) {
 // the first time the book is opened, to keep sync fast and cheap on data).
 export async function syncFromOneDrive() {
   if (!isSignedIn()) return { ok: false, reason: "not-signed-in" };
-  await oneDrive.ensureBooksFolder();
-  const items = await oneDrive.listBooks();
+  const providerName = cloud.getProviderName();
+  const source = providerName === "gdrive" ? "gdrive" : "onedrive";
+  const idField = providerName === "gdrive" ? "gdriveFileId" : "oneDriveItemId";
+
+  await cloud.ensureBooksFolder();
+  const items = await cloud.listBooks();
+
+  // 1. Pull: everything in the cloud folder becomes a book on this device.
+  const seenNames = new Set();
   for (const item of items) {
-    const id = idForOneDriveItem(item.id);
+    seenNames.add(item.name);
+    const id = idForCloudItem(providerName, item.id);
     const existing = await db.getBookMeta(id);
     await db.saveBookMeta({
+      ...(existing || {}),
       id,
-      source: "onedrive",
-      oneDriveItemId: item.id,
-      oneDriveFileName: item.name,
+      source,
+      [idField]: item.id,
+      oneDriveFileName: item.name, // the sidecar name, whichever drive it's on
       title: existing?.title || stripExt(item.name),
       author: existing?.author || "",
       format: guessFormat(item.name),
@@ -47,7 +67,99 @@ export async function syncFromOneDrive() {
       updatedAt: item.lastModifiedDateTime,
     });
   }
-  return { ok: true, count: items.length };
+
+  // 2. Push: books imported on this device get uploaded, which is what makes
+  // them appear on your other devices at all. Books already in the folder are
+  // skipped by name so syncing twice doesn't duplicate anything.
+  let uploaded = 0;
+  const locals = (await db.getAllBooks()).filter((b) => b.source === "local" && !b.cloudPushedAs);
+  for (const meta of locals) {
+    const name = cloudFileName(meta);
+    if (seenNames.has(name)) {
+      await db.saveBookMeta({ ...meta, cloudPushedAs: name });
+      continue;
+    }
+    const blob = await db.getBookFile(meta.id);
+    if (!blob) continue;
+    try {
+      await cloud.uploadBook(name, blob);
+      await db.saveBookMeta({ ...meta, cloudPushedAs: name, oneDriveFileName: name });
+      uploaded++;
+    } catch (err) {
+      // One unuploadable book shouldn't abort the whole sync.
+      console.warn("Could not upload", name, err);
+    }
+  }
+
+  // 3. Shelves travel too, so categories match across devices.
+  await syncShelfLayout();
+
+  return { ok: true, count: items.length, uploaded };
+}
+
+// ---- Shelf layout sync ------------------------------------------------------
+// Custom shelves live only on the device that made them unless they're written
+// somewhere shared. This keeps a small manifest in the cloud folder and merges
+// it with what's here, newest wins per shelf.
+const LAYOUT_FILE = "shelf-library.json";
+
+// A book's id is device-local: the same book is `local_…` on the device that
+// imported it and `gd_…`/`od_…` on a device that got it from the drive. Shelf
+// membership therefore can't travel as ids — it travels as this stable key,
+// derived from the file's name in the drive, which both devices agree on.
+function bookKey(meta) {
+  const name = meta.cloudPushedAs || meta.oneDriveFileName;
+  if (name) return `f:${String(name).toLowerCase()}`;
+  return `t:${String(meta.title || "").toLowerCase()}:${meta.format}`;
+}
+
+export async function syncShelfLayout() {
+  if (!isSignedIn()) return { ok: false, reason: "not-signed-in" };
+
+  const books = await db.getAllBooks();
+  const idToKey = new Map(books.map((b) => [b.id, bookKey(b)]));
+  const keyToId = new Map();
+  for (const b of books) if (!keyToId.has(bookKey(b))) keyToId.set(bookKey(b), b.id);
+
+  const localShelves = await db.getAllShelves();
+  let remote = null;
+  try {
+    remote = await cloud.downloadJson(LAYOUT_FILE);
+  } catch (_) { /* first run, or no manifest yet */ }
+
+  const byId = new Map();
+  // Remote shelves arrive keyed by book key; translate them into whatever ids
+  // those books happen to have on this device, dropping any this device
+  // doesn't have yet.
+  for (const s of (remote && remote.shelves) || []) {
+    byId.set(s.id, {
+      ...s,
+      bookIds: (s.bookKeys || []).map((k) => keyToId.get(k)).filter(Boolean),
+    });
+  }
+  for (const s of localShelves) {
+    const other = byId.get(s.id);
+    if (!other) { byId.set(s.id, s); continue; }
+    const mine = Date.parse(s.updatedAt || s.createdAt || 0) || 0;
+    const theirs = Date.parse(other.updatedAt || other.createdAt || 0) || 0;
+    byId.set(s.id, theirs > mine ? other : s);
+  }
+
+  const merged = [...byId.values()].map((s) => ({
+    id: s.id, name: s.name, bookIds: s.bookIds || [],
+    createdAt: s.createdAt, updatedAt: s.updatedAt || s.createdAt,
+  }));
+  for (const s of merged) await db.saveShelfRecord(s);
+
+  await cloud.uploadJson(LAYOUT_FILE, {
+    version: 1,
+    updatedAt: new Date().toISOString(),
+    shelves: merged.map((s) => ({
+      ...s,
+      bookKeys: (s.bookIds || []).map((id) => idToKey.get(id)).filter(Boolean),
+    })),
+  });
+  return { ok: true, shelves: merged.length };
 }
 
 function stripExt(name) {
@@ -95,13 +207,13 @@ export async function ensureBookBytes(meta) {
   let blob = await db.getBookFile(meta.id);
   if (blob) return blob;
 
-  if (meta.source === "onedrive") {
-    blob = await oneDrive.downloadBookContent(meta.oneDriveItemId);
+  if (meta.source === "onedrive" || meta.source === "gdrive") {
+    blob = await cloud.downloadBookContent(meta);
     await db.saveBookFile(meta.id, blob);
     await db.saveBookMeta({ ...meta, cachedLocally: true });
     return blob;
   }
-  throw new Error("Book file is missing and has no OneDrive source to re-download from.");
+  throw new Error("Book file is missing and has no cloud copy to re-download from.");
 }
 
 // `progress` is a 0–1 fraction used to draw the bar on the book's cover. PDFs
@@ -264,7 +376,8 @@ export async function listAllShelves() {
 
 export async function createCustomShelf(name) {
   const id = `shelf_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
-  await db.saveShelfRecord({ id, name, bookIds: [], createdAt: new Date().toISOString() });
+  const now = new Date().toISOString();
+  await db.saveShelfRecord({ id, name, bookIds: [], createdAt: now, updatedAt: now });
   return id;
 }
 
@@ -282,6 +395,7 @@ export async function toggleBookInCustomShelf(shelfId, bookId) {
   if (!rec) return;
   const has = rec.bookIds.includes(bookId);
   rec.bookIds = has ? rec.bookIds.filter((id) => id !== bookId) : [...rec.bookIds, bookId];
+  rec.updatedAt = new Date().toISOString();
   await db.saveShelfRecord(rec);
   return !has; // true if the book is now in the shelf
 }

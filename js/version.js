@@ -7,4 +7,4 @@
 // installed web app, where an old copy can otherwise sit in the cache and
 // look identical to a new one.
 // ============================================================================
-export const APP_VERSION = "1.5.0";
+export const APP_VERSION = "1.12.0";

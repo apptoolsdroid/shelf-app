@@ -6,8 +6,8 @@
 // be undone. Undo/redo stacks are per-book and reset when you switch books.
 // ============================================================================
 import * as db from "./db.js";
-import * as oneDrive from "./oneDrive.js";
-import { isSignedIn } from "./msalAuth.js";
+import * as cloud from "./cloud.js";
+const isSignedIn = () => cloud.isSignedIn();
 
 let currentBookId = null;
 let currentDoc = null; // { bookId, annotations, updatedAt, dirty }
@@ -82,6 +82,59 @@ export async function addBookmark({ position, format, label }) {
   return record;
 }
 
+// Ink drawn on a page. `page` anchors it (PDF page number), and the points are
+// normalized to that page, so the stroke lands in the same place at any zoom.
+export async function addInk({ page, tool, color, points, pressure, format = "pdf" }) {
+  const record = {
+    id: uid(), type: "ink", format, page, tool, color, points, pressure,
+    createdAt: Date.now(),
+  };
+  await applyAction({
+    redo: () => currentDoc.annotations.push(record),
+    undo: () => {
+      currentDoc.annotations = currentDoc.annotations.filter((a) => a.id !== record.id);
+    },
+  });
+  return record;
+}
+
+// Ink on the book's notes canvas, which is one board per book rather than
+// being tied to any page.
+export async function addCanvasInk({ tool, color, points, pressure }) {
+  const record = { id: uid(), type: "canvasInk", tool, color, points, pressure, createdAt: Date.now() };
+  await applyAction({
+    redo: () => currentDoc.annotations.push(record),
+    undo: () => {
+      currentDoc.annotations = currentDoc.annotations.filter((a) => a.id !== record.id);
+    },
+  });
+  return record;
+}
+
+// A typed note placed on the canvas. x/y are normalized to the board.
+export async function addCanvasNote({ x, y, text = "" }) {
+  const record = { id: uid(), type: "canvasNote", x, y, text, createdAt: Date.now() };
+  await applyAction({
+    redo: () => currentDoc.annotations.push(record),
+    undo: () => {
+      currentDoc.annotations = currentDoc.annotations.filter((a) => a.id !== record.id);
+    },
+  });
+  return record;
+}
+
+// Editing a note's text is undoable as a single step, so a stray edit can be
+// taken back the same way a stroke can.
+export async function updateCanvasNote(id, text) {
+  const note = currentDoc.annotations.find((a) => a.id === id);
+  if (!note || note.text === text) return;
+  const before = note.text;
+  await applyAction({
+    redo: () => { const n = currentDoc.annotations.find((a) => a.id === id); if (n) n.text = text; },
+    undo: () => { const n = currentDoc.annotations.find((a) => a.id === id); if (n) n.text = before; },
+  });
+}
+
 export async function removeAnnotation(id) {
   const removed = currentDoc.annotations.find((a) => a.id === id);
   if (!removed) return;
@@ -123,9 +176,9 @@ export function isDirty() {
 export async function saveToOneDrive(bookMeta) {
   if (!currentDoc) return { ok: true, skipped: true };
   if (!isSignedIn()) return { ok: false, reason: "not-signed-in" };
-  if (!bookMeta || !bookMeta.oneDriveFileName) return { ok: false, reason: "no-onedrive-copy" };
+  if (!bookMeta || !bookMeta.oneDriveFileName) return { ok: false, reason: "no-cloud-copy" };
 
-  await oneDrive.uploadAnnotations(bookMeta.oneDriveFileName, {
+  await cloud.uploadAnnotations(bookMeta.oneDriveFileName, {
     bookId: currentDoc.bookId,
     annotations: currentDoc.annotations,
     updatedAt: currentDoc.updatedAt,
@@ -140,7 +193,7 @@ export async function saveToOneDrive(bookMeta) {
 // the local cache with whatever's in the OneDrive sidecar (newest wins).
 export async function reconcileWithOneDrive(bookMeta) {
   if (!isSignedIn() || !bookMeta.oneDriveFileName) return;
-  const remote = await oneDrive.downloadAnnotations(bookMeta.oneDriveFileName);
+  const remote = await cloud.downloadAnnotations(bookMeta.oneDriveFileName);
   if (!remote) return; // nothing remote yet — local is authoritative
   const remoteTime = remote.updatedAt ? Date.parse(remote.updatedAt) : 0;
   const localTime = currentDoc.updatedAt ? Date.parse(currentDoc.updatedAt) : 0;

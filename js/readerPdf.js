@@ -9,6 +9,7 @@
 // ============================================================================
 import * as annotations from "./annotations.js";
 import { attachSwipe } from "./gestures.js";
+import { attachInk, renderStrokes } from "./ink.js";
 
 // pdf.js v4 ships as an ES module only — loading it with a plain <script> tag
 // silently leaves pdfjsLib undefined and every PDF fails to open. Import it
@@ -29,6 +30,28 @@ let onStateChange = null;
 let resizeObserver = null;
 let scrollObserver = null;
 let detachSwipe = null;
+
+// Ink mode: while it's on, the page is a drawing surface instead of something
+// you select text on or swipe to turn.
+let inkMode = false;       // false when off, otherwise the active tool name
+let inkColor = "#c0392b";
+export function setInkTool(tool) { inkMode = tool; refreshInkLayers(); }
+export function getInkTool() { return inkMode; }
+export function setInkColor(c) { inkColor = c; }
+export function isInking() { return !!inkMode; }
+
+// The text layer has to stop intercepting pointers while drawing, or every
+// stroke turns into a text selection instead.
+function refreshInkLayers() {
+  if (!containerEl) return;
+  for (const svg of containerEl.querySelectorAll(".ink-layer")) {
+    svg.style.pointerEvents = inkMode ? "auto" : "none";
+    svg.style.touchAction = inkMode ? "none" : "auto";
+  }
+  for (const tl of containerEl.querySelectorAll(".textLayer")) {
+    tl.style.pointerEvents = inkMode ? "none" : "auto";
+  }
+}
 const renderedScrollPages = new Set();
 
 export async function openPdf({ container, blob, savedState, onState }) {
@@ -51,7 +74,7 @@ export async function openPdf({ container, blob, savedState, onState }) {
   detachSwipe = attachSwipe(containerEl, {
     onPrev: () => prevPage(),
     onNext: () => nextPage(),
-    isEnabled: () => viewMode !== "scroll",
+    isEnabled: () => viewMode !== "scroll" && !inkMode,
   });
   await render();
 }
@@ -107,9 +130,17 @@ async function buildPageEl(pageNum, scale) {
   wrapper.dataset.page = String(pageNum);
   Object.assign(wrapper.style, { position: "relative", width: `${viewport.width}px`, height: `${viewport.height}px`, flexShrink: "0" });
 
+  // Render at the screen's real pixel density. A canvas sized only in CSS
+  // pixels is drawn at 1x and then stretched by the display, which is exactly
+  // what makes PDF text look soft and smeary on a Retina iPad. Capped at 2x
+  // because the memory cost grows with the square of this and the visible
+  // gain above 2x is negligible.
+  const dpr = Math.min(window.devicePixelRatio || 1, 2);
   const canvas = document.createElement("canvas");
-  canvas.width = viewport.width;
-  canvas.height = viewport.height;
+  canvas.width = Math.floor(viewport.width * dpr);
+  canvas.height = Math.floor(viewport.height * dpr);
+  canvas.style.width = `${viewport.width}px`;
+  canvas.style.height = `${viewport.height}px`;
   wrapper.appendChild(canvas);
 
   const textLayerDiv = document.createElement("div");
@@ -126,12 +157,31 @@ async function buildPageEl(pageNum, scale) {
   textLayerDiv.style.setProperty("--scale-factor", String(scale));
   wrapper.appendChild(textLayerDiv);
 
+  // Drawing surface for this page, sized to the page so normalized stroke
+  // coordinates map straight onto it at any zoom level.
+  const inkLayer = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+  inkLayer.setAttribute("class", "ink-layer");
+  inkLayer.setAttribute("viewBox", `0 0 ${viewport.width} ${viewport.height}`);
+  Object.assign(inkLayer.style, {
+    position: "absolute", left: 0, top: 0,
+    width: `${viewport.width}px`, height: `${viewport.height}px`,
+    pointerEvents: inkMode ? "auto" : "none",
+    touchAction: inkMode ? "none" : "auto",
+  });
+  wrapper.appendChild(inkLayer);
+
   const underlineLayer = document.createElement("div");
   underlineLayer.className = "underline-layer";
   Object.assign(underlineLayer.style, { position: "absolute", left: 0, top: 0, right: 0, bottom: 0, pointerEvents: "none" });
   wrapper.appendChild(underlineLayer);
 
-  await page.render({ canvasContext: canvas.getContext("2d"), viewport }).promise;
+  await page.render({
+    canvasContext: canvas.getContext("2d"),
+    viewport,
+    // Scales the drawing up to match the enlarged backing store above, so the
+    // page is rendered at full device resolution rather than resampled.
+    transform: dpr !== 1 ? [dpr, 0, 0, dpr, 0, 0] : null,
+  }).promise;
 
   const textContent = await page.getTextContent();
   pdfjsLib.renderTextLayer({ textContentSource: textContent, container: textLayerDiv, viewport, textDivs: [] });
@@ -141,6 +191,18 @@ async function buildPageEl(pageNum, scale) {
   textLayerDiv.addEventListener("touchend", handler);
 
   drawSavedUnderlines(underlineLayer, viewport, pageNum);
+  drawSavedInk(inkLayer, viewport.width, viewport.height, pageNum);
+
+  attachInk(inkLayer, {
+    isEnabled: () => !!inkMode,
+    getTool: () => inkMode,
+    getColor: () => inkColor,
+    // Saving triggers an annotations change, and refreshInk() redraws this
+    // layer from the record — appending the stroke here as well would paint
+    // every line twice, which shows up as double-dark highlighter.
+    onStroke: (stroke) => annotations.addInk({ page: pageNum, format: "pdf", ...stroke }),
+    onErase: (id) => annotations.removeAnnotation(id),
+  });
 
   return wrapper;
 }
@@ -180,6 +242,26 @@ function paintUnderlineRects(layerEl, normalizedRects, viewport) {
     });
     layerEl.appendChild(div);
   }
+}
+
+function drawSavedInk(svgEl, w, h, pageNum) {
+  const strokes = annotations.getCurrentAnnotations()
+    .filter((a) => a.type === "ink" && a.format === "pdf" && a.page === pageNum);
+  renderStrokes(svgEl, strokes, w, h);
+}
+
+// Redraws every visible page's ink from the annotation record. Undo and redo
+// change that record, and without this the strokes on screen would drift out
+// of step with what's actually saved.
+export function refreshInk() {
+  if (!containerEl) return;
+  for (const wrapper of containerEl.querySelectorAll(".pdf-page-wrapper")) {
+    const svg = wrapper.querySelector(".ink-layer");
+    const pageNum = Number(wrapper.dataset.page);
+    if (!svg || !pageNum) continue;
+    drawSavedInk(svg, parseFloat(svg.style.width), parseFloat(svg.style.height), pageNum);
+  }
+  refreshInkLayers();
 }
 
 function drawSavedUnderlines(layerEl, viewport, pageNum) {

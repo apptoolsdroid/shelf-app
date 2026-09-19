@@ -61,6 +61,32 @@ If you chose "Personal Microsoft accounts only" in step 3, leave
 work/school + personal option, change it to
 `https://login.microsoftonline.com/common`.
 
+## 1b. Or use Google Drive instead (~5 minutes)
+
+You can sync with Google Drive rather than OneDrive — the app supports both and
+you pick which one to connect when you tap **Sign in**. You only need whichever
+one you actually use.
+
+1. Go to https://console.cloud.google.com and create a project (any name).
+2. **APIs & Services → Library**, search for **Google Drive API**, enable it.
+3. **APIs & Services → OAuth consent screen**: choose **External**, fill in an
+   app name and your email, and save. While the app is in "Testing", add your
+   own Google account under **Test users** — otherwise sign-in is refused.
+4. **APIs & Services → Credentials → Create credentials → OAuth client ID**:
+   - Application type: **Web application**
+   - Under **Authorised JavaScript origins**, add the address you host the app
+     at (for GitHub Pages that's `https://<username>.github.io`, with no path
+     and no trailing slash).
+   - Create, then copy the **Client ID**.
+5. Paste it into `js/config.js` as `google.clientId`.
+
+By default the app asks for the `drive.file` scope, which only lets it see
+files it created itself. That is enough to sync everything between your own
+devices, and it means the app cannot read the rest of your Drive. If you also
+want it to pick up books you drop into the folder by hand from a computer,
+change `google.scope` in `js/config.js` to
+`https://www.googleapis.com/auth/drive`.
+
 ## 2. Host the app somewhere with a real HTTPS address
 
 Microsoft's sign-in page refuses to run from a `file://` link, so the app
@@ -86,7 +112,13 @@ Apps, Cloudflare Pages. GitHub Pages is just the simplest free option.)
   Chrome will offer "Install app," or use the menu → "Add to Home screen."
   From then on it opens full-screen from its own icon, like any app.
 - **Sign in**: tap "Sign in," approve the Microsoft popup.
-- **Sync OneDrive**: tap "Sync OneDrive." The app creates a `Books` folder
+- **Syncing across devices**: tap **Sign in** and pick OneDrive or Google
+  Drive. Then the cloud icon in the header does a two-way sync: it pulls down
+  anything new in the cloud folder, uploads books you imported on this device,
+  and syncs your shelf layout, so a second device signed in to the same
+  account ends up with the same books in the same categories. Books are still
+  stored on each device as well, so everything keeps working offline.
+- **Sync OneDrive**: tap the cloud icon. The app creates a `Books` folder
   in the root of your OneDrive the first time (change the folder name in
   `js/config.js` if you'd rather point it at an existing folder). Drop any
   `.epub` or `.pdf` file in there and hit Sync again to see it appear.

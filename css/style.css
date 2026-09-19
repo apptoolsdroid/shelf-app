@@ -68,7 +68,8 @@ body {
   flex-shrink: 0;
 }
 .topbar h1 {
-  font-family: var(--serif); font-size: 19px; margin: 0; flex: 1; font-weight: 700;
+  font-family: var(--serif); font-size: 19px; margin: 0; font-weight: 700;
+  flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
   color: var(--on-wood); letter-spacing: 0.02em;
   text-shadow: 0 1px 0 rgba(0,0,0,0.4);
 }
@@ -87,31 +88,42 @@ select.btn { appearance: none; -webkit-appearance: none; font-size: 13px; paddin
 /* ---- Bookshelf ---- */
 #shelfView { flex: 1; display: flex; flex-direction: column; min-height: 0; }
 #shelfView.hidden { display: none; }
-.shelf-actions {
-  display: flex; gap: 8px; padding: 14px 16px; flex-wrap: wrap; flex-shrink: 0;
-  background: var(--bg-elevated); border-bottom: 1px solid var(--border);
+/* The three library actions, as icons in the header. Hidden while reading,
+   where they'd be meaningless and the title needs the room. */
+.lib-actions { display: flex; gap: 6px; flex-shrink: 0; }
+body.reading .lib-actions { display: none; }
+.topbar .spacer { flex: 1; }
+.icon-btn {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 36px; height: 36px; flex-shrink: 0;
+  border-radius: 8px; cursor: pointer;
+  background: rgba(0,0,0,0.22); border: 1px solid var(--brass-dark);
+  color: var(--on-wood);
+  transition: background 0.15s ease;
 }
+.icon-btn:hover { background: rgba(0,0,0,0.36); }
+.icon-btn:active { transform: translateY(1px); }
+.icon-btn svg { width: 19px; height: 19px; display: block; }
 
-.library { flex: 1; display: flex; min-height: 0; }
+.library { flex: 1; display: flex; flex-direction: column; min-height: 0; }
 
 /* Vertical rail of shelf tabs — a wall-mounted bank of wood-and-brass name
    plates, like the end labels on real library stacks. Scrolls independently. */
 .shelf-rail {
-  width: 64px; flex-shrink: 0; overflow-y: auto; overflow-x: hidden;
-  display: flex; flex-direction: column; gap: 10px;
-  padding: 16px 10px;
+  width: 100%; flex-shrink: 0; overflow-y: auto; max-height: 34vh;
+  display: flex; flex-direction: row; flex-wrap: wrap; gap: 8px;
+  padding: 12px 16px;
   background:
     repeating-linear-gradient(90deg, rgba(0,0,0,0.12) 0 2px, transparent 2px 18px),
     linear-gradient(180deg, var(--wood), var(--wood-dark));
-  border-right: 3px solid var(--brass-dark);
-  box-shadow: inset -4px 0 10px rgba(0,0,0,0.3);
+  border-bottom: 3px solid var(--brass-dark);
+  box-shadow: inset 0 -4px 10px rgba(0,0,0,0.3);
 }
 .shelf-tab {
-  writing-mode: vertical-rl; text-orientation: mixed;
   background: linear-gradient(180deg, var(--brass-light) 0%, var(--brass) 55%, var(--brass-dark) 100%);
-  border: 1px solid var(--brass-dark); border-radius: 3px 3px 7px 7px;
-  padding: 14px 0 10px; min-height: 112px; flex-shrink: 0;
-  display: flex; align-items: center; justify-content: center; gap: 8px;
+  border: 1px solid var(--brass-dark); border-radius: 6px;
+  padding: 7px 12px 7px 10px; flex-shrink: 0;
+  display: inline-flex; align-items: center; gap: 7px; white-space: nowrap;
   font-family: var(--serif); font-size: 12.5px; font-weight: 700; letter-spacing: 0.03em;
   color: #3a2a0e; cursor: pointer; position: relative;
   box-shadow: 0 2px 5px rgba(0,0,0,0.45), inset 0 1px 0 rgba(255,255,255,0.35);
@@ -119,30 +131,123 @@ select.btn { appearance: none; -webkit-appearance: none; font-size: 13px; paddin
 }
 .shelf-tab::before {
   /* the little brass rivet pinning the plate to the shelf */
-  content: ""; position: absolute; top: 6px; left: 50%; transform: translateX(-50%);
-  width: 5px; height: 5px; border-radius: 50%;
+  content: ""; width: 5px; height: 5px; border-radius: 50%; flex-shrink: 0;
   background: radial-gradient(circle at 35% 30%, #fff8, var(--wood-dark));
-  writing-mode: horizontal-tb;
 }
 .shelf-tab .tab-count {
-  writing-mode: horizontal-tb; font-size: 10px; font-weight: 700; font-family: -apple-system, sans-serif;
+  font-size: 10px; font-weight: 700; font-family: -apple-system, sans-serif;
   background: rgba(0,0,0,0.18); color: #3a2a0e;
   border-radius: 8px; padding: 1px 5px; min-width: 16px; text-align: center;
 }
-.shelf-tab .tab-chevron { writing-mode: horizontal-tb; font-size: 10px; opacity: 0.7; }
+.shelf-tab .tab-chevron { font-size: 10px; opacity: 0.7; }
 .shelf-tab.active {
   opacity: 1;
   box-shadow: 0 0 0 2px var(--brass-light), 0 3px 10px rgba(0,0,0,0.5), inset 0 1px 0 rgba(255,255,255,0.5);
-  transform: translateX(1px);
+  transform: translateY(1px);
 }
 .shelf-tab-new {
-  border: 1px dashed var(--brass); background: rgba(0,0,0,0.15); color: var(--brass-light);
-  min-height: 56px; font-size: 20px; border-radius: 6px; flex-shrink: 0;
+  border: 1px dashed var(--brass); background: rgba(0,0,0,0.15); color: var(--on-wood);
+  padding: 7px 14px; font-size: 17px; border-radius: 6px; flex-shrink: 0;
   cursor: pointer; display: flex; align-items: center; justify-content: center;
 }
 .new-shelf-input {
-  flex-shrink: 0; width: 100%; border-radius: 6px; border: 1px solid var(--brass);
+  flex-shrink: 0; width: 140px; border-radius: 6px; border: 1px solid var(--brass);
   padding: 6px; font-size: 12px; text-align: center; background: var(--bg-elevated); color: var(--text);
+}
+
+/* ---- The room: every category as its own labelled bookcase ---------------- */
+#racksView { flex: 1; overflow-y: auto; min-height: 0; }
+#racksView.hidden { display: none; }
+.library.hidden { display: none; }
+
+.racks-grid {
+  display: grid; gap: 22px; padding: 22px 22px 40px;
+  grid-template-columns: repeat(auto-fill, minmax(210px, 1fr));
+  background:
+    radial-gradient(ellipse 900px 500px at 20% 0%, rgba(0,0,0,0.10), transparent 60%),
+    var(--bg);
+}
+
+.rack {
+  border: none; padding: 0; cursor: pointer; text-align: left;
+  background: none; color: var(--text);
+  display: flex; flex-direction: column; gap: 9px;
+  transition: transform 0.16s ease;
+}
+.rack:hover { transform: translateY(-3px); }
+
+/* The carcass: side panels and a top, in the same walnut as the shelves. */
+.rack-case {
+  background: linear-gradient(180deg, var(--wood-light), var(--wood) 40%, var(--wood-dark));
+  border-radius: 6px 6px 3px 3px;
+  padding: 9px 9px 6px;
+  box-shadow: 0 10px 18px -8px rgba(0,0,0,0.65), inset 0 1px 0 rgba(255,255,255,0.22);
+  display: flex; flex-direction: column; gap: 7px;
+}
+.rack-shelf { display: flex; flex-direction: column; }
+/* Books stand on the board, so they align to its top edge. */
+.rack-books {
+  display: flex; align-items: flex-end; gap: 3px;
+  height: 96px; padding: 0 6px;
+  background: linear-gradient(180deg, rgba(0,0,0,0.42), rgba(0,0,0,0.12));
+}
+.rack-books .spine {
+  width: var(--w, 11px); height: var(--h, 80%);
+  position: relative; overflow: hidden;
+  border: none; padding: 0; cursor: pointer;
+  transition: transform 0.14s ease, box-shadow 0.14s ease;
+  background: linear-gradient(90deg, rgba(0,0,0,0.38), var(--c, #7a3b2e) 38%, rgba(255,255,255,0.16));
+  border-radius: 1px 2px 0 0;
+  box-shadow: 0 1px 2px rgba(0,0,0,0.5);
+  flex-shrink: 0;
+}
+/* The title, printed down the spine the way it is on a real book. */
+.rack-books .spine i {
+  position: absolute; inset: 0;
+  display: flex; align-items: center; justify-content: center;
+  writing-mode: vertical-rl; text-orientation: mixed;
+  font-family: var(--serif); font-style: normal; font-size: 7.5px; font-weight: 700;
+  letter-spacing: 0.03em; white-space: nowrap;
+  color: rgba(255, 244, 225, 0.88);
+  text-shadow: 0 1px 1px rgba(0,0,0,0.65);
+  padding: 4px 0;
+}
+/* Easing a book up off the shelf, the way you would to read the spine. */
+.rack-books .spine:hover { transform: translateY(-5px); box-shadow: 0 5px 8px rgba(0,0,0,0.6); }
+.rack-books .spine:focus-visible { outline: 2px solid var(--brass-light); outline-offset: 1px; }
+
+.rack-plate { border: 1px solid var(--brass-dark); cursor: pointer; width: 100%; }
+.rack-case { cursor: pointer; }
+
+.rack-board {
+  height: 9px;
+  background: linear-gradient(180deg, var(--wood-light), var(--wood) 55%, var(--wood-dark));
+  box-shadow: 0 4px 7px -2px rgba(0,0,0,0.6), inset 0 1px 0 rgba(255,255,255,0.28);
+  border-radius: 0 0 2px 2px;
+}
+
+/* Brass label screwed to the front of the case. */
+.rack-plate {
+  display: flex; align-items: center; gap: 7px; justify-content: center;
+  background: linear-gradient(180deg, var(--brass-light), var(--brass) 55%, var(--brass-dark));
+  border: 1px solid var(--brass-dark); border-radius: 5px;
+  padding: 6px 10px; color: #3a2a0e;
+  font-family: var(--serif); font-size: 12.5px; font-weight: 700; letter-spacing: 0.03em;
+  box-shadow: 0 2px 5px rgba(0,0,0,0.4), inset 0 1px 0 rgba(255,255,255,0.4);
+  text-align: center;
+}
+.rack-plate .rack-count {
+  font-family: -apple-system, sans-serif; font-size: 10px;
+  background: rgba(0,0,0,0.18); border-radius: 8px; padding: 1px 6px;
+}
+.rack.active .rack-plate { box-shadow: 0 0 0 2px var(--brass-light), 0 2px 6px rgba(0,0,0,0.5); }
+
+/* "Back to the room" chip, first in the shelf rail. */
+.shelf-tab-back {
+  background: rgba(0,0,0,0.22); border: 1px solid var(--brass-dark);
+  color: var(--on-wood); border-radius: 6px; padding: 7px 12px;
+  font-size: 12.5px; font-weight: 600; cursor: pointer; flex-shrink: 0;
+  display: inline-flex; align-items: center; white-space: nowrap;
 }
 
 /* Panel: the currently open shelf, rendered as an actual bookcase — each
@@ -175,11 +280,18 @@ select.btn { appearance: none; -webkit-appearance: none; font-size: 13px; paddin
   box-shadow: inset 6px 0 10px -8px rgba(0,0,0,0.6), inset -6px 0 10px -8px rgba(0,0,0,0.6);
 }
 .grid {
-  display: grid; gap: 18px;
-  grid-template-columns: repeat(auto-fill, minmax(120px, 1fr));
-  align-items: end;
+  display: flex; gap: 18px; align-items: flex-end;
+  overflow-x: auto; overflow-y: hidden;
+  scroll-snap-type: x proximity;
+  padding-bottom: 2px;
   position: relative; z-index: 1;
+  scrollbar-width: thin; scrollbar-color: rgba(0,0,0,0.35) transparent;
+  -webkit-overflow-scrolling: touch;
 }
+.grid .book-card { flex: 0 0 120px; scroll-snap-align: start; }
+.grid::-webkit-scrollbar { height: 7px; }
+.grid::-webkit-scrollbar-track { background: transparent; }
+.grid::-webkit-scrollbar-thumb { background: rgba(0,0,0,0.32); border-radius: 4px; }
 /* The wood shelf board itself, running the width of the cubby, sitting right
    under the row of standing books. */
 .shelf-board {
@@ -390,3 +502,79 @@ body.immersive .page-arrow { opacity: 0; pointer-events: none; }
   background: var(--brass); color: var(--accent-text); font-weight: 600;
 }
 .reader-morph-surface #morphBackBtn[hidden] { display: none; }
+
+/* ---- Ink: drawing on a page, and the notes canvas ------------------------- */
+.ink-tools { display: inline-flex; align-items: center; gap: 4px; }
+.ink-tools.hidden { display: none; }
+.ink-color {
+  width: 30px; height: 30px; padding: 0; border-radius: 6px; cursor: pointer;
+  border: 1px solid var(--brass-dark); background: none;
+}
+/* The active tool has to be obvious — otherwise it's impossible to tell why a
+   stroke went down as a highlight rather than a pen line. */
+.reader-toolbar .btn.icon.tool-active {
+  background: var(--brass); color: var(--accent-text);
+  box-shadow: 0 0 0 2px var(--brass-light);
+}
+/* Drawing must not scroll or select the page underneath. */
+.ink-layer { touch-action: none; }
+body.inking .textLayer { user-select: none; }
+
+#notesView {
+  position: fixed; inset: 0; z-index: 60; display: none;
+  flex-direction: column; background: var(--reader-bg);
+}
+#notesView.active { display: flex; }
+
+.notes-board {
+  flex: 1; overflow: auto; -webkit-overflow-scrolling: touch;
+  background: var(--reader-bg);
+}
+.notes-surface {
+  position: relative; width: 2400px; height: 1800px;
+  /* Faint grid, like a sheet of squared paper, so strokes and notes have
+     something to sit against when the board is otherwise empty. */
+  background-image:
+    linear-gradient(rgba(60,40,20,0.07) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(60,40,20,0.07) 1px, transparent 1px);
+  background-size: 40px 40px, 40px 40px;
+}
+.notes-ink { position: absolute; inset: 0; width: 100%; height: 100%; touch-action: none; }
+.notes-notes { position: absolute; inset: 0; pointer-events: none; }
+.notes-notes > * { pointer-events: auto; }
+
+.canvas-note {
+  position: absolute; min-width: 150px; max-width: 260px;
+  background: #fdf3c8; color: #2a2318;
+  border: 1px solid rgba(120,95,40,0.5); border-radius: 3px;
+  box-shadow: 0 4px 10px -2px rgba(0,0,0,0.35);
+  padding: 9px 22px 9px 10px;
+  font-size: 13px; line-height: 1.45;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+}
+.canvas-note-text { outline: none; min-height: 1.4em; white-space: pre-wrap; word-break: break-word; }
+.canvas-note-text:empty::before { content: "Type a note…"; color: rgba(60,50,25,0.45); }
+.canvas-note-del {
+  position: absolute; top: 3px; right: 4px; width: 17px; height: 17px;
+  border: none; background: none; cursor: pointer; line-height: 1;
+  color: rgba(60,50,25,0.55); font-size: 15px; padding: 0;
+}
+.canvas-note-del:hover { color: var(--danger); }
+
+/* ---- Cloud provider picker ------------------------------------------------ */
+.provider-menu {
+  position: absolute; top: 52px; right: 12px; z-index: 70;
+  background: var(--bg-elevated); border: 1px solid var(--brass-dark);
+  border-radius: 10px; padding: 6px; min-width: 190px;
+  box-shadow: 0 10px 26px rgba(0,0,0,0.5);
+}
+.provider-menu.hidden { display: none; }
+.provider-menu-label {
+  font-size: 10.5px; text-transform: uppercase; letter-spacing: 0.1em;
+  color: var(--text-dim); padding: 6px 10px 4px; font-weight: 700;
+}
+.provider-item {
+  display: block; width: 100%; text-align: left; border: none; background: none;
+  color: var(--text); font-size: 13.5px; padding: 9px 10px; border-radius: 6px; cursor: pointer;
+}
+.provider-item:hover { background: var(--border); }

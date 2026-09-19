@@ -91,3 +91,42 @@ export async function uploadAnnotations(bookFileName, annotationsDoc) {
     body: JSON.stringify(annotationsDoc, null, 2),
   });
 }
+
+// ---- Parity helpers so cloud.js can treat both drives the same -------------
+
+// Uploads a book's bytes into the bookshelf folder. This is what makes a book
+// imported on one device show up on another.
+export async function uploadBook(name, blob) {
+  const path = `/me/drive/root:/${encodedFolderPath()}/${encodeURIComponent(name)}:/content`;
+  const resp = await graphFetch(path, {
+    method: "PUT",
+    headers: { "Content-Type": blob.type || "application/octet-stream" },
+    body: blob,
+  });
+  const item = await resp.json();
+  return { id: item.id, name: item.name };
+}
+
+// Generic small-JSON read/write in the bookshelf folder, used for the shelf
+// layout manifest as well as annotation sidecars.
+export async function downloadJson(name) {
+  try {
+    const resp = await graphFetch(
+      `/me/drive/root:/${encodedFolderPath()}/${encodeURIComponent(name)}:/content`
+    );
+    return await resp.json();
+  } catch (err) {
+    return null; // Not there yet.
+  }
+}
+
+export async function uploadJson(name, obj) {
+  await graphFetch(
+    `/me/drive/root:/${encodedFolderPath()}/${encodeURIComponent(name)}:/content`,
+    {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(obj, null, 2),
+    }
+  );
+}
