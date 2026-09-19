@@ -20,6 +20,23 @@ function debounce(fn, ms) {
   };
 }
 
+// Roughly how far through the book we are, as a 0–1 fraction, for the progress
+// bar on the cover. epub.js can give an exact percentage, but only after
+// indexing every page of the book, which is slow on large titles and would
+// stall opening. Position within the spine is instant and close enough to be
+// useful at a glance.
+function estimateProgress(location) {
+  if (location && location.start && typeof location.start.percentage === "number" && location.start.percentage > 0) {
+    return location.start.percentage;
+  }
+  try {
+    const items = book.spine.spineItems;
+    const idx = items.findIndex((it) => it.href === location.start.href);
+    if (idx >= 0 && items.length > 0) return (idx + 1) / items.length;
+  } catch (_) { /* fall through — a missing progress bar is not worth an error */ }
+  return undefined;
+}
+
 export async function openEpub({ container, blob, savedLocation, onLocation }) {
   onLocationChange = onLocation;
   containerEl = container;
@@ -36,7 +53,7 @@ export async function openEpub({ container, blob, savedLocation, onLocation }) {
 
   rendition.on("relocated", (location) => {
     lastCfi = location.start.cfi;
-    if (onLocationChange) onLocationChange(lastCfi);
+    if (onLocationChange) onLocationChange(lastCfi, estimateProgress(location));
   });
 
   // Screen-size adjustment: re-flow columns/pagination whenever the reader's

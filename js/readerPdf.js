@@ -9,6 +9,15 @@
 // ============================================================================
 import * as annotations from "./annotations.js";
 
+// pdf.js v4 ships as an ES module only — loading it with a plain <script> tag
+// silently leaves pdfjsLib undefined and every PDF fails to open. Import it
+// properly here, and point it at its worker relative to this file so it keeps
+// working when the app is hosted in a subfolder (e.g. GitHub Pages project
+// sites). If the module worker can't start, pdf.js falls back to rendering on
+// the main thread — slower, but it still opens the book.
+import * as pdfjsLib from "./vendor/pdf.min.js";
+pdfjsLib.GlobalWorkerOptions.workerSrc = new URL("./vendor/pdf.worker.min.js", import.meta.url).href;
+
 let pdfDoc = null;
 let currentPage = 1;
 let viewMode = "single"; // "single" | "double" | "scroll"

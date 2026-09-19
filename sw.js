@@ -1,13 +1,23 @@
 // Minimal offline app-shell cache. Book bytes and annotations live in
 // IndexedDB (see js/db.js), not here — this just lets the app itself
 // (HTML/CSS/JS) load with no network connection.
-const CACHE_NAME = "shelf-shell-v1";
+// Bump this version whenever app files change — the activate handler deletes
+// every cache that isn't the current name, which is what forces an already
+// installed copy on a tablet to pick up the new files instead of serving the
+// old ones forever.
+const CACHE_NAME = "shelf-shell-v1.3.1";
 const SHELL_FILES = [
   "./",
   "./index.html",
   "./manifest.json",
   "./css/style.css",
+  "./js/vendor/msal-browser.min.js",
+  "./js/vendor/jszip.min.js",
+  "./js/vendor/epub.min.js",
+  "./js/vendor/pdf.min.js",
+  "./js/vendor/pdf.worker.min.js",
   "./js/main.js",
+  "./js/version.js",
   "./js/config.js",
   "./js/msalAuth.js",
   "./js/oneDrive.js",

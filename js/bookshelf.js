@@ -16,8 +16,12 @@ function idForOneDriveItem(itemId) {
   return `od_${itemId}`;
 }
 
-function idForLocalFile(name) {
-  return `local_${name}_${Date.now()}`;
+// Deterministic on purpose: importing the same file twice produces the same
+// id, which is what lets importLocalFile detect a duplicate instead of adding
+// a second copy of the same book to the shelf. Size is included so two
+// genuinely different files that happen to share a name don't collide.
+function idForLocalFile(name, size) {
+  return `local_${name}_${size}`;
 }
 
 // Pull the current file listing from the OneDrive Books folder and make sure
@@ -52,8 +56,14 @@ function stripExt(name) {
 
 // Imports a book the user picked from their device's own file system
 // (works with no OneDrive connection at all).
+// Returns { meta, duplicate }. If the book is already on the shelf we keep the
+// existing entry untouched rather than overwriting it — re-importing a book
+// must never wipe out your reading position, bookmarks or underlines.
 export async function importLocalFile(file) {
-  const id = idForLocalFile(file.name);
+  const id = idForLocalFile(file.name, file.size);
+  const existing = await db.getBookMeta(id);
+  if (existing) return { meta: existing, duplicate: true };
+
   await db.saveBookFile(id, file);
   const meta = {
     id,
@@ -65,10 +75,11 @@ export async function importLocalFile(file) {
     format: guessFormat(file.name),
     cachedLocally: true,
     lastLocation: null,
+    progress: 0,
     updatedAt: new Date().toISOString(),
   };
   await db.saveBookMeta(meta);
-  return meta;
+  return { meta, duplicate: false };
 }
 
 export async function getShelf() {
@@ -92,16 +103,34 @@ export async function ensureBookBytes(meta) {
   throw new Error("Book file is missing and has no OneDrive source to re-download from.");
 }
 
-export async function saveLastLocation(bookId, location) {
+// `progress` is a 0–1 fraction used to draw the bar on the book's cover. PDFs
+// report it exactly (page / total); EPUBs approximate it from position in the
+// spine, since computing true percentages means indexing the whole book.
+export async function saveLastLocation(bookId, location, progress) {
   const meta = await db.getBookMeta(bookId);
   if (!meta) return;
   meta.lastLocation = location;
+  if (typeof progress === "number" && isFinite(progress)) {
+    meta.progress = Math.min(1, Math.max(0, progress));
+  } else if (location && typeof location === "object" && location.numPages) {
+    meta.progress = Math.min(1, (location.page || 1) / location.numPages);
+  }
   meta.updatedAt = new Date().toISOString();
   await db.saveBookMeta(meta);
 }
 
+// Deletes the book's metadata, cached bytes and annotations, and also unfiles
+// it from every custom shelf so deleted books can't linger as phantom entries
+// in a category's member list.
 export async function removeBook(bookId) {
   await db.deleteBook(bookId);
+  const shelves = await db.getAllShelves();
+  for (const s of shelves) {
+    if (s.bookIds && s.bookIds.includes(bookId)) {
+      s.bookIds = s.bookIds.filter((id) => id !== bookId);
+      await db.saveShelfRecord(s);
+    }
+  }
 }
 
 // ---- Shelves (categories) ---------------------------------------------------

@@ -68,6 +68,8 @@ needs to live at a real URL. The easiest free option is **GitHub Pages**:
 
 1. Create a new GitHub repository and upload everything in this folder
    (`index.html`, `manifest.json`, `sw.js`, `css/`, `js/`, `icons/`) to it.
+   Note `js/vendor/` contains the bundled EPUB/PDF libraries — upload it too,
+   or the reader won't open anything.
 2. In the repo, go to **Settings → Pages**, set **Source** to your main
    branch (root folder), and save.
 3. GitHub gives you a URL like `https://<username>.github.io/<repo>/`.
@@ -91,6 +93,21 @@ Apps, Cloudflare Pages. GitHub Pages is just the simplest free option.)
 - **Import a file directly**: "Import file..." lets you add an EPUB/PDF
   straight from your iPad/Android's Files app, with no OneDrive account
   needed. It's cached locally exactly like a OneDrive book.
+- **Version & updates**: the small `v1.3.0` chip in the top bar tells you which
+  build you're actually running. Tap it to force an update check and reload —
+  useful on an installed web app, where an old cached copy can otherwise look
+  identical to a new one. After you push changes to GitHub, bump `APP_VERSION`
+  in `js/version.js` and `CACHE_NAME` in `sw.js`; the app then swaps itself to
+  the new build on next launch.
+- **Removing a book / filing it**: tap the **⋯** button on any cover. That menu
+  files the book into any category (or creates a new one on the spot), and
+  **Remove book** deletes it from the device along with its underlines and
+  bookmarks — it asks twice, because there's no undo for it.
+- **No duplicates**: importing a file you already have is detected and skipped,
+  so re-importing never creates a second copy or resets your reading position.
+- **Reading progress**: a thin bar across the bottom of each cover shows how far
+  through the book you are, and opening a book always returns you to exactly
+  where you stopped.
 - **Shelves**: the left rail is a scrollable column of shelves — spine-style
   tabs with the name running top-to-bottom, tap one to open it. "All Books,"
   "On This Device," "EPUB," and "PDF" are always there when relevant;
@@ -132,6 +149,14 @@ Apps, Cloudflare Pages. GitHub Pages is just the simplest free option.)
   or leave a book.
 - The dot next to "Sign in" is amber when you have unsaved-to-OneDrive
   changes, green when signed in and synced.
+
+## Works offline, and without a Microsoft account
+
+The EPUB and PDF engines ship inside the app (`js/vendor/`) rather than being
+pulled from a CDN, so the reader works with no network at all and there's no
+third-party URL that can disappear or change. Steps 1 (Azure) is genuinely
+optional: skip it and everything except OneDrive sync still works — import,
+read, underline, bookmark, categorise, and offline access.
 
 ## How your data is stored
 

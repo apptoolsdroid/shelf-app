@@ -8,24 +8,24 @@
 <link rel="apple-touch-icon" href="icons/icon-192.png" />
 <meta name="apple-mobile-web-app-capable" content="yes" />
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
-<meta name="theme-color" content="#1e293b" />
+<meta name="theme-color" content="#2a1c12" />
 <link rel="stylesheet" href="css/style.css" />
 
 <!-- Microsoft sign-in -->
-<script src="https://alcdn.msauth.net/browser/2.38.3/js/msal-browser.min.js"></script>
+<!-- Libraries are bundled with the app rather than pulled from a CDN: the
+     reader then works with no network at all, and there is no third-party
+     URL that can 404 or change out from under it. pdf.js is loaded as a
+     real ES module by js/readerPdf.js (v4 ships ESM only). -->
+<script src="js/vendor/msal-browser.min.js"></script>
 <!-- EPUB rendering -->
-<script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/epubjs/0.3.93/epub.min.js"></script>
-<!-- PDF rendering -->
-<script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/4.0.379/pdf.min.js"></script>
-<script>
-  pdfjsLib.GlobalWorkerOptions.workerSrc = "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/4.0.379/pdf.worker.min.js";
-</script>
+<script src="js/vendor/jszip.min.js"></script>
+<script src="js/vendor/epub.min.js"></script>
 </head>
 <body>
 <div id="app">
   <div class="topbar">
     <h1 id="titleText">Shelf</h1>
+    <button class="version-chip" id="versionChip" title="App version — tap to check for updates">v—</button>
     <span class="status-dot" id="statusDot" title="OneDrive status"></span>
     <button class="btn" id="signInBtn">Sign in</button>
   </div>
@@ -74,11 +74,19 @@
 
       <button class="btn primary" id="saveBtn">Save</button>
     </div>
-    <div id="readerContainer">
-      <div id="epubContainer" class="hidden"></div>
-      <div id="pdfContainer" class="hidden"></div>
+    <!-- The stage is what the loading/error overlay covers. The toolbar above
+         it is deliberately outside, so the back button can never be hidden
+         behind the overlay if a book is slow to load or fails to load. -->
+    <div class="reader-stage">
+      <div id="readerContainer">
+        <div id="epubContainer" class="hidden"></div>
+        <div id="pdfContainer" class="hidden"></div>
+      </div>
+      <div id="readerMorphSurface" class="reader-morph-surface hidden">
+        <span id="readerMorphText">Opening…</span>
+        <button class="btn" id="morphBackBtn" hidden>‹ Back to shelf</button>
+      </div>
     </div>
-    <div id="readerMorphSurface" class="reader-morph-surface hidden">Opening…</div>
   </div>
 </div>
 
@@ -86,8 +94,29 @@
 
 <script type="module" src="js/main.js"></script>
 <script>
+  // Update handling. Without this, an installed copy can keep serving the
+  // cached old build indefinitely — you reinstall and still see the previous
+  // version. Here the page always revalidates sw.js, and when a new worker
+  // takes control the page reloads itself once so you land on the new build.
   if ("serviceWorker" in navigator) {
-    window.addEventListener("load", () => navigator.serviceWorker.register("sw.js").catch(() => {}));
+    window.addEventListener("load", async () => {
+      try {
+        const reg = await navigator.serviceWorker.register("sw.js", { updateViaCache: "none" });
+        reg.update();
+        // Re-check when the app is brought back to the foreground.
+        document.addEventListener("visibilitychange", () => {
+          if (document.visibilityState === "visible") reg.update();
+        });
+        window.__shelfCheckUpdate = () => reg.update();
+      } catch (_) { /* offline or unsupported — the app still runs */ }
+
+      let reloaded = false;
+      navigator.serviceWorker.addEventListener("controllerchange", () => {
+        if (reloaded) return;
+        reloaded = true;
+        window.location.reload();
+      });
+    });
   }
 </script>
 </body>

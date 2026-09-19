@@ -3,6 +3,7 @@
 // the books inside whichever one is open), sign-in, sync, and the reader
 // (EPUB or PDF) together, and drives the toolbar (undo/redo/bookmark/save).
 // ============================================================================
+import { APP_VERSION } from "./version.js";
 import { initAuth, isSignedIn, signIn, signOut, getAccount } from "./msalAuth.js";
 import * as shelf from "./bookshelf.js";
 import * as annotations from "./annotations.js";
@@ -79,10 +80,16 @@ el("syncBtn").addEventListener("click", async () => {
 });
 
 el("localFileInput").addEventListener("change", async (e) => {
+  let added = 0;
+  let skipped = 0;
   for (const file of e.target.files) {
-    await shelf.importLocalFile(file);
+    const result = await shelf.importLocalFile(file);
+    if (result.duplicate) skipped++;
+    else added++;
   }
-  toast("Imported");
+  if (added && skipped) toast(`Added ${added}, skipped ${skipped} already on your shelf`);
+  else if (added) toast(added === 1 ? "Added to your shelf" : `Added ${added} books`);
+  else if (skipped) toast(skipped === 1 ? "Already on your shelf" : `All ${skipped} already on your shelf`);
   await renderLibrary();
   e.target.value = "";
 });
@@ -209,16 +216,20 @@ function renderBookCard(book) {
   const card = document.createElement("div");
   card.className = "book-card";
   card.dataset.bookId = book.id;
+  // The title is printed on the cover itself, so there's deliberately no
+  // caption underneath — that also lets the book sit directly on the shelf
+  // board instead of floating above it.
+  const pct = Math.round((book.progress || 0) * 100);
   card.innerHTML = `
-    <button class="card-add-btn" title="Add to shelf">+</button>
-    <div class="book-cover">
+    <button class="card-menu-btn" title="Book options" aria-label="Book options">⋯</button>
+    <div class="book-cover" title="${escapeHtml(book.title)}">
       <span class="fmt-badge">${book.format}</span>
-      <span>${escapeHtml(book.title)}</span>
+      <span class="cover-title">${escapeHtml(book.title)}</span>
+      ${book.source === "onedrive" ? `<span class="cloud-badge" title="From OneDrive">☁</span>` : ""}
+      ${pct > 0 ? `<span class="cover-progress" title="${pct}% read"><i style="width:${pct}%"></i></span>` : ""}
     </div>
-    <div class="book-title">${escapeHtml(book.title)}</div>
-    <div class="book-sub">${book.source === "onedrive" ? "OneDrive" : "On this device"}</div>
   `;
-  card.querySelector(".card-add-btn").addEventListener("click", (e) => {
+  card.querySelector(".card-menu-btn").addEventListener("click", (e) => {
     e.stopPropagation();
     toggleShelfMenu(book, e.currentTarget);
   });
@@ -228,11 +239,20 @@ function renderBookCard(book) {
 
 // ---- "Add to shelf" popover --------------------------------------------------
 
+// The outside-click listener runs on the CAPTURE phase, so it fires before the
+// menu's own click handler — without this guard it tears the menu down on the
+// very first tap inside it, which breaks any multi-step interaction (such as
+// the tap-again-to-confirm delete).
+function onDocumentClickForMenu(e) {
+  if (openMenuEl && openMenuEl.contains(e.target)) return;
+  closeShelfMenu();
+}
+
 function closeShelfMenu() {
   if (openMenuEl) {
     openMenuEl.remove();
     openMenuEl = null;
-    document.removeEventListener("click", closeShelfMenu, true);
+    document.removeEventListener("click", onDocumentClickForMenu, true);
   }
 }
 
@@ -248,20 +268,36 @@ async function toggleShelfMenu(book, anchorBtn) {
   menu.style.top = `${rect.bottom + window.scrollY + 4}px`;
   menu.style.left = `${rect.left + window.scrollX}px`;
 
-  if (customShelves.length === 0) {
-    menu.innerHTML = `<div class="shelf-menu-item" data-action="new"><span class="check"></span>New shelf…</div>`;
-  } else {
-    menu.innerHTML = customShelves.map((s) => `
-      <div class="shelf-menu-item" data-shelf-id="${s.id}">
-        <span class="check">${s.bookIds.includes(book.id) ? "✓" : ""}</span>${escapeHtml(s.name)}
-      </div>
-    `).join("") + `<div class="shelf-menu-item" data-action="new"><span class="check"></span>New shelf…</div>`;
-  }
+  const shelfItems = customShelves.map((s) => `
+    <div class="shelf-menu-item" data-shelf-id="${s.id}">
+      <span class="check">${s.bookIds.includes(book.id) ? "✓" : ""}</span>${escapeHtml(s.name)}
+    </div>
+  `).join("");
+  menu.innerHTML =
+    `<div class="shelf-menu-label">Categories</div>` +
+    shelfItems +
+    `<div class="shelf-menu-item" data-action="new"><span class="check">＋</span>New category…</div>` +
+    `<div class="shelf-menu-sep"></div>` +
+    `<div class="shelf-menu-item danger" data-action="delete"><span class="check">🗑</span>Remove book</div>`;
 
   menu.addEventListener("click", async (e) => {
     e.stopPropagation();
     const item = e.target.closest(".shelf-menu-item");
     if (!item) return;
+    if (item.dataset.action === "delete") {
+      // Deliberately a two-step confirm: this erases the file and any
+      // underlines/bookmarks from the device, and there's no undo for it.
+      if (item.dataset.confirm !== "1") {
+        item.dataset.confirm = "1";
+        item.innerHTML = `<span class="check">🗑</span>Tap again to confirm`;
+        return;
+      }
+      closeShelfMenu();
+      await shelf.removeBook(book.id);
+      toast(`Removed "${book.title}"`);
+      await renderLibrary();
+      return;
+    }
     if (item.dataset.action === "new") {
       const placeholderTab = document.createElement("div");
       menu.replaceChildren(placeholderTab);
@@ -278,7 +314,7 @@ async function toggleShelfMenu(book, anchorBtn) {
 
   document.body.appendChild(menu);
   openMenuEl = menu;
-  setTimeout(() => document.addEventListener("click", closeShelfMenu, true), 0);
+  setTimeout(() => document.addEventListener("click", onDocumentClickForMenu, true), 0);
 }
 
 // ---- Reader ----------------------------------------------------------------
@@ -308,7 +344,8 @@ function showReaderShell(meta) {
   el("pageInfo").textContent = "";
 
   const morph = el("readerMorphSurface");
-  morph.textContent = meta.title;
+  el("readerMorphText").textContent = meta.title;
+  el("morphBackBtn").hidden = true;
   morph.classList.remove("hidden");
 }
 
@@ -353,7 +390,7 @@ async function loadBookContent(meta) {
         container: containerEl,
         blob,
         savedLocation: meta.lastLocation,
-        onLocation: (cfi) => shelf.saveLastLocation(meta.id, cfi),
+        onLocation: (cfi, progress) => shelf.saveLastLocation(meta.id, cfi, progress),
       });
     } else {
       const saved = meta.lastLocation || {};
@@ -370,8 +407,13 @@ async function loadBookContent(meta) {
     }
     el("readerMorphSurface").classList.add("hidden");
   } catch (err) {
+    console.error("Failed to open book:", err);
     toast(`Couldn't open book: ${err.message}`);
-    el("readerMorphSurface").textContent = "Couldn't open this book.";
+    // Say what went wrong and always offer a way out — the toolbar's back
+    // button is still there, but an explicit escape here means a failed book
+    // can never feel like a dead end.
+    el("readerMorphText").textContent = `Couldn't open "${meta.title}" — ${err.message}`;
+    el("morphBackBtn").hidden = false;
   }
 }
 
@@ -420,6 +462,18 @@ async function closeBook() {
 }
 
 el("backBtn").addEventListener("click", closeBook);
+el("morphBackBtn").addEventListener("click", closeBook);
+
+// Without these, a thrown error anywhere leaves the app looking simply dead —
+// nothing happens when you tap, and there's no clue why. Surfacing it as a
+// toast turns a silent failure into something reportable.
+window.addEventListener("error", (e) => {
+  toast(`Error: ${e.message}`);
+});
+window.addEventListener("unhandledrejection", (e) => {
+  const reason = e.reason && e.reason.message ? e.reason.message : String(e.reason);
+  toast(`Error: ${reason}`);
+});
 
 // PDF page navigation via tapping left/right thirds of the container
 // (only meaningful in single/double page mode — scroll mode is scrolled).
@@ -497,6 +551,19 @@ document.addEventListener("visibilitychange", () => {
 });
 
 // ---- Boot ------------------------------------------------------------------
+
+// Version chip: shows which build is running, and tapping it forces an update
+// check and reload so you never have to guess whether you're on the latest.
+el("versionChip").textContent = `v${APP_VERSION}`;
+el("versionChip").addEventListener("click", async () => {
+  toast(`Shelf v${APP_VERSION} — checking for updates…`);
+  try {
+    if (window.__shelfCheckUpdate) await window.__shelfCheckUpdate();
+    const regs = await navigator.serviceWorker.getRegistrations();
+    await Promise.all(regs.map((r) => r.update()));
+  } catch (_) { /* offline: nothing to check against */ }
+  setTimeout(() => window.location.reload(), 600);
+});
 
 (async function boot() {
   try {
