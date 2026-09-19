@@ -4,7 +4,7 @@
 // import" means. OneDrive is a sync target on top of this, not the only copy.
 // ============================================================================
 const DB_NAME = "shelf-db";
-const DB_VERSION = 2;
+const DB_VERSION = 3;
 
 let dbPromise = null;
 
@@ -25,6 +25,12 @@ function openDb() {
       }
       if (!db.objectStoreNames.contains("shelves")) {
         db.createObjectStore("shelves", { keyPath: "id" }); // user-created custom shelves
+      }
+      if (!db.objectStoreNames.contains("kv")) {
+        // Small odds and ends that aren't books: currently the handle to the
+        // backup file being synced with, which localStorage can't hold because
+        // a file handle isn't a string.
+        db.createObjectStore("kv", { keyPath: "key" });
       }
     };
     req.onsuccess = () => resolve(req.result);
@@ -125,4 +131,21 @@ export async function saveShelfRecord(shelf) {
 
 export async function deleteShelfRecord(id) {
   await tx("shelves", "readwrite", (store) => store.delete(id));
+}
+
+
+// ---- Small key/value settings ----------------------------------------------
+
+export async function getSetting(key) {
+  const rec = await tx("kv", "readonly", (store) => reqToPromise(store.get(key)));
+  const value = await rec;
+  return value ? value.value : null;
+}
+
+export async function saveSetting(key, value) {
+  await tx("kv", "readwrite", (store) => store.put({ key, value }));
+}
+
+export async function deleteSetting(key) {
+  await tx("kv", "readwrite", (store) => store.delete(key));
 }

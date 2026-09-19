@@ -12,6 +12,8 @@ import * as annotations from "./annotations.js";
 import * as epubReader from "./readerEpub.js";
 import * as pdfReader from "./readerPdf.js";
 import * as notes from "./notes.js";
+import * as backup from "./backup.js";
+import * as db from "./db.js";
 
 const el = (id) => document.getElementById(id);
 const shelfView = el("shelfView");
@@ -65,6 +67,7 @@ el("signInBtn").addEventListener("click", (e) => {
   const connected = cloud.isSignedIn();
   el("providerConnect").classList.toggle("hidden", connected);
   el("providerAccount").classList.toggle("hidden", !connected);
+  el("signInBtn").title = connected ? "Account, sync folder and backup" : "Connect a drive, or use a backup file";
   if (connected) {
     const acc = cloud.getAccount() || {};
     el("accountLabel").textContent = `${cloud.getProviderLabel()} · ${acc.username || "connected"}`;
@@ -72,6 +75,160 @@ el("signInBtn").addEventListener("click", (e) => {
     el("currentFolderName").textContent = folder ? folder.name : CONFIG.booksFolderPath;
   }
   toggleProviderMenu(el("providerMenu").classList.contains("hidden"));
+});
+
+// ---- Library backup file ---------------------------------------------------
+// The route that needs no app registration at all: a single file you keep
+// wherever you like, that the Sync button reads and writes.
+
+// ---- Sync with a backup file ------------------------------------------------
+// One button, three situations:
+//   * a drive is connected      -> sync with the drive
+//   * the browser can hold onto a file (desktop) -> read, merge and write the
+//     same file back, with nothing to confirm after the first time
+//   * otherwise (iPad Safari)   -> pick the file, merge it, and hand back the
+//     updated one to save over the old, because Safari won't let a page write
+//     to a file you chose earlier
+const BACKUP_HANDLE_KEY = "backupFileHandle";
+
+const canHoldFiles = () =>
+  typeof window.showOpenFilePicker === "function" && typeof window.showSaveFilePicker === "function";
+
+async function handleWithPermission(handle) {
+  if (!handle) return null;
+  const opts = { mode: "readwrite" };
+  if ((await handle.queryPermission(opts)) === "granted") return handle;
+  if ((await handle.requestPermission(opts)) === "granted") return handle;
+  return null;
+}
+
+function downloadBlob(blob, filename) {
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 30000);
+}
+
+const packProgress = (verb) => (done, total) => {
+  if (total > 3 && done % 3 === 0) toast(`${verb} ${done}/${total} books…`);
+};
+
+async function mergeThenRebuild(file) {
+  const result = await backup.importLibrary(file, packProgress("Merging"));
+  await renderLibrary();
+  const blob = await backup.exportLibrary(packProgress("Packing"));
+  return { result, blob };
+}
+
+async function syncWithFile() {
+  // Desktop: remember the file and round-trip it silently from then on.
+  if (canHoldFiles()) {
+    let handle = await handleWithPermission(await db.getSetting(BACKUP_HANDLE_KEY).catch(() => null));
+    if (!handle) {
+      try {
+        [handle] = await window.showOpenFilePicker({
+          types: [{ description: "Shelf backup", accept: { "application/zip": [".zip"] } }],
+          multiple: false,
+        });
+      } catch (_) {
+        return; // the picker was dismissed
+      }
+      handle = await handleWithPermission(handle);
+      if (!handle) { toast("Permission to that file was declined"); return; }
+      // Remembering the file is a convenience — if the browser won't store the
+      // handle, syncing must still go ahead and simply ask again next time.
+      try {
+        await db.saveSetting(BACKUP_HANDLE_KEY, handle);
+      } catch (_) { /* we'll pick the file again next sync */ }
+    }
+
+    toast("Syncing with your backup file…");
+    const { result, blob } = await mergeThenRebuild(await handle.getFile());
+    const writable = await handle.createWritable();
+    await writable.write(blob);
+    await writable.close();
+    toast(`Synced — ${result.added} new book${result.added === 1 ? "" : "s"}, file updated`);
+    return;
+  }
+
+  // iPad and anything else: pick the file each time, get the updated one back.
+  pendingFileSync = true;
+  el("importBackupInput").click();
+}
+
+let pendingFileSync = false;
+
+el("syncFileBtn").addEventListener("click", async (e) => {
+  e.stopPropagation();
+  toggleProviderMenu(false);
+  try {
+    await syncWithFile();
+  } catch (err) {
+    toast(`Sync failed: ${err.message}`);
+  }
+});
+
+el("forgetBackupBtn").addEventListener("click", async (e) => {
+  e.stopPropagation();
+  toggleProviderMenu(false);
+  await db.deleteSetting(BACKUP_HANDLE_KEY).catch(() => {});
+  toast("Forgotten — the next sync will ask for the file again");
+});
+
+
+el("exportBtn").addEventListener("click", async (e) => {
+  e.stopPropagation();
+  toggleProviderMenu(false);
+  toast("Building backup…");
+  try {
+    const blob = await backup.exportLibrary((done, total) => {
+      if (total > 3 && done % 3 === 0) toast(`Packing ${done}/${total} books…`);
+    });
+    const stamp = new Date().toISOString().slice(0, 10);
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `shelf-library-${stamp}.zip`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    // Revoking immediately can cancel the download on some browsers.
+    setTimeout(() => URL.revokeObjectURL(url), 30000);
+    const mb = (blob.size / (1024 * 1024)).toFixed(1);
+    toast(`Backup ready (${mb} MB) — save it to Drive or Files`);
+  } catch (err) {
+    toast(`Export failed: ${err.message}`);
+  }
+});
+
+el("importBackupInput").addEventListener("change", async (e) => {
+  const file = e.target.files[0];
+  e.target.value = "";
+  const roundTrip = pendingFileSync;
+  pendingFileSync = false;
+  if (!file) return;
+  toggleProviderMenu(false);
+  toast(roundTrip ? "Syncing with your backup file…" : "Reading backup…");
+  try {
+    if (roundTrip) {
+      const { result, blob } = await mergeThenRebuild(file);
+      // Same filename, so saving it puts the updated library back where the
+      // old one was.
+      downloadBlob(blob, file.name);
+      toast(`Merged ${result.added} new book${result.added === 1 ? "" : "s"} — save the file back over the old one`);
+    } else {
+      const result = await backup.importLibrary(file, packProgress("Restoring"));
+      await renderLibrary();
+      toast(`Added ${result.added} book${result.added === 1 ? "" : "s"}` +
+            (result.shelvesAdded ? `, ${result.shelvesAdded} shelf/shelves` : ""));
+    }
+  } catch (err) {
+    toast(`Import failed: ${err.message}`);
+  }
 });
 
 el("signOutBtn").addEventListener("click", async (e) => {
@@ -273,8 +430,13 @@ document.addEventListener("click", () => toggleProviderMenu(false));
 // ---- Bookshelf: rail of shelves + the open shelf's panel --------------------
 
 async function syncNow() {
+  // Not connected to a drive? Then "sync" means the backup file.
   if (!cloud.isSignedIn()) {
-    toast("Connect a cloud drive first.");
+    try {
+      await syncWithFile();
+    } catch (err) {
+      toast(`Sync failed: ${err.message}`);
+    }
     return;
   }
   toast(`Syncing with ${cloud.getProviderLabel()}…`);

@@ -195,6 +195,32 @@ third-party URL that can disappear or change. Steps 1 (Azure) is genuinely
 optional: skip it and everything except OneDrive sync still works — import,
 read, underline, bookmark, categorise, and offline access.
 
+## Moving your library without connecting a drive
+
+If you'd rather not register the app with Google or Microsoft at all, the
+**Sync** button in the header works without any account. When no drive is
+connected it syncs against a single backup `.zip` file that you keep wherever
+you like — Google Drive and OneDrive both appear as locations in the tablet's
+Files app, so the file can live in either.
+
+On a computer, the browser can hold on to that file, so syncing is one tap:
+it reads the file, merges it with what's on this device, and writes the
+updated version straight back. On an iPad, Safari won't let a page write to a
+file you chose earlier, so it asks for the file, merges it, and hands back the
+updated one to save over the old — same result, one extra tap.
+
+To make the first file, tap **Sign in → Create a new backup…**. That writes your whole library — books, shelves,
+reading positions, underlines, ink and notes — to a single `.zip` file. Save it
+wherever you like: Google Drive and OneDrive both appear as locations inside
+the tablet's Files app, so you can drop it straight in. On the other device,
+tap **Sign in → Import library…** and pick that file.
+
+This needs no client ID, no API and no account. The trade-off is that it's a
+snapshot you move yourself, rather than the continuous two-way sync you get
+from connecting a drive. Importing merges rather than overwrites: books you
+already have are kept, and the more recently updated copy of a reading
+position or annotation wins.
+
 ## How your data is stored
 
 - Every book's bytes and every annotation live in the browser's local

@@ -28,7 +28,7 @@
     <!-- The three library actions live in the header itself, so there's only
          one bar across the top instead of two stacked ones. -->
     <div class="lib-actions" id="libActions">
-      <button class="icon-btn" id="syncBtn" title="Sync with OneDrive" aria-label="Sync with OneDrive">
+      <button class="icon-btn" id="syncBtn" title="Sync" aria-label="Sync">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round">
           <path d="M7 13.5a3.5 3.5 0 0 1 .5-7 5 5 0 0 1 9.6 1.4A3 3 0 0 1 17 13.5"/>
           <path d="M12 11v8M12 19l2.6-2.6M12 19l-2.6-2.6"/>
@@ -66,6 +66,15 @@
         <div class="shelf-menu-sep"></div>
         <button class="provider-item" id="signOutBtn">Sign out</button>
       </div>
+      <!-- Works with or without a cloud connection: a plain file you can move
+           between devices yourself. -->
+      <div class="shelf-menu-sep"></div>
+      <div class="provider-menu-label">Backup file</div>
+      <button class="provider-item" id="syncFileBtn">Sync with backup file…</button>
+      <button class="provider-item" id="exportBtn">Create a new backup…</button>
+      <label class="provider-item" for="importBackupInput">Restore from a backup…</label>
+      <button class="provider-item" id="forgetBackupBtn">Forget saved backup file</button>
+      <input type="file" id="importBackupInput" accept=".zip" class="hidden" />
     </div>
   </div>
 
