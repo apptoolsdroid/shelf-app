@@ -258,7 +258,65 @@ body.reading .lib-actions { display: none; }
     radial-gradient(ellipse 900px 500px at 20% 0%, rgba(0,0,0,0.10), transparent 60%),
     var(--bg);
 }
-.shelf-panel-header { display: flex; align-items: baseline; gap: 10px; margin-bottom: 20px; }
+.shelf-panel-header { display: flex; align-items: baseline; gap: 10px; margin-bottom: 12px; }
+
+/* ---- Find, sort and file ---------------------------------------------------
+   A strip under the shelf name. It wraps on a narrow tablet rather than
+   squeezing, because the search box losing width is what makes a search box
+   useless. */
+.shelf-tools {
+  display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-bottom: 16px;
+}
+.shelf-search {
+  position: relative; display: flex; align-items: center;
+  flex: 1 1 200px; min-width: 170px; max-width: 360px;
+}
+.shelf-search .search-icon {
+  position: absolute; left: 10px; font-size: 15px; color: var(--text-dim); pointer-events: none;
+}
+.shelf-search input {
+  width: 100%; padding: 8px 30px 8px 28px; font-size: 13.5px;
+  border-radius: 8px; border: 1px solid var(--border);
+  background: var(--bg-elevated); color: var(--text);
+  -webkit-appearance: none; appearance: none;
+}
+.shelf-search input::-webkit-search-decoration,
+.shelf-search input::-webkit-search-cancel-button { -webkit-appearance: none; }
+.shelf-search input:focus { outline: none; border-color: var(--brass); }
+.shelf-search .search-clear {
+  position: absolute; right: 6px; border: none; background: none; cursor: pointer;
+  color: var(--text-dim); font-size: 18px; line-height: 1; padding: 2px 6px;
+}
+.shelf-sort { flex-shrink: 0; max-width: 170px; }
+.shelf-select-btn.on { background: var(--accent); color: var(--accent-text); font-weight: 600; }
+
+.shelf-selection {
+  display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+  padding: 9px 12px; margin-bottom: 16px; border-radius: 9px;
+  background: rgba(207, 165, 87, 0.14); border: 1px solid var(--brass-dark);
+}
+.shelf-selection .sel-count { font-size: 12.5px; color: var(--text-dim); }
+.shelf-selection .sel-count b { color: var(--text); font-size: 14px; }
+.shelf-selection .spacer { flex: 1; }
+
+/* A book being picked rather than opened: it lifts slightly and gets a brass
+   tick, so the ones you've chosen are obvious from across the shelf. */
+.book-card.selectable .book-cover { cursor: pointer; }
+/* The ⋯ menu sits in the same corner as the tick, and it has nothing to offer
+   while you're choosing books, so it steps aside. */
+.book-card.selectable .card-menu-btn { display: none; }
+.book-card.selected .book-cover {
+  outline: 3px solid var(--brass); outline-offset: 2px;
+  transform: translateY(-3px);
+}
+.book-cover .select-tick {
+  position: absolute; top: 6px; left: 6px; z-index: 3;
+  width: 20px; height: 20px; border-radius: 50%;
+  border: 2px solid var(--brass-dark); background: rgba(255,255,255,0.75);
+  display: flex; align-items: center; justify-content: center;
+  font-size: 12px; font-weight: 700; color: #3a2a0e;
+}
+.book-card.selected .book-cover .select-tick { background: var(--brass); }
 .shelf-panel-header h2 { font-family: var(--serif); font-size: 23px; margin: 0; color: var(--text); }
 .shelf-panel-header .book-sub { font-size: 12px; }
 .shelf-panel-header .shelf-delete-btn {
@@ -373,6 +431,37 @@ body.reading .lib-actions { display: none; }
    its state, the reason underneath when there is one, and a retry beside it.
    The point is to be readable at a glance on a tablet held at arm's length. */
 .tracker-card { max-width: 560px; width: 100%; }
+
+/* Connection state, at the top where it belongs: nothing else in this panel
+   means anything until you know whether the app is talking to anything. */
+.conn-bar {
+  display: flex; align-items: center; gap: 9px; flex-wrap: wrap;
+  padding: 10px 12px; margin-bottom: 12px; border-radius: 9px;
+  background: rgba(0,0,0,0.06); border: 1px solid var(--border);
+}
+.conn-bar .spacer { flex: 1; }
+.conn-dot { width: 10px; height: 10px; border-radius: 50%; flex-shrink: 0; }
+.conn-dot.ok   { background: #4e8a4a; box-shadow: 0 0 0 3px rgba(78,138,74,0.2); }
+.conn-dot.wait { background: #c8a24a; animation: connPulse 1.1s ease-in-out infinite; }
+.conn-dot.warn { background: #c07d2a; }
+.conn-dot.bad  { background: #a5392f; box-shadow: 0 0 0 3px rgba(165,57,47,0.18); }
+.conn-dot.off  { background: var(--text-dim); }
+@keyframes connPulse { 50% { opacity: 0.35; } }
+.conn-text { font-size: 12.5px; color: var(--text); flex: 1 1 200px; min-width: 0; }
+
+.sync-actions { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; margin-bottom: 12px; }
+.sync-actions .spacer { flex: 1; }
+.sync-actions .btn { font-size: 12.5px; padding: 6px 11px; }
+
+.log-row {
+  display: flex; gap: 10px; padding: 6px 2px; font-size: 12px;
+  border-bottom: 1px solid rgba(90, 62, 26, 0.12);
+}
+.log-row:last-child { border-bottom: none; }
+.log-when { color: var(--text-dim); flex-shrink: 0; width: 108px; }
+.log-text { color: var(--text); }
+.log-row.error .log-text { color: #a5392f; }
+.log-row.warn .log-text { color: #a8701a; }
 .tracker-summary { font-size: 13px; color: var(--text-dim); margin: 2px 0 12px; }
 .tracker-summary b { color: var(--text); }
 .tracker-summary .warn { color: #a8701a; font-weight: 600; }

@@ -80,26 +80,112 @@ async function loadSdk() {
   }
 }
 
+// ---- Connection state -------------------------------------------------------
+// One place that knows whether sync is on, and one way to be told when that
+// changes. Before this, the signed-in flag was read once during startup and
+// never again, so a session restored a moment later left the menu still
+// offering to turn sync on when it was already running — and the only way out
+// was to turn it off and on again.
+
+export const state = {
+  phase: "off",      // off | connecting | online | error | offline
+  account: null,
+  error: null,
+  activity: null,    // {phase, index, total, title} while books are moving
+  lastRunAt: null,
+  last: null,        // the last sync result
+  retryAt: null,
+};
+
+const listeners = new Set();
+
+export function onStateChange(fn) {
+  listeners.add(fn);
+  return () => listeners.delete(fn);
+}
+
+function setState(patch) {
+  Object.assign(state, patch);
+  for (const fn of listeners) {
+    try { fn(state); } catch (_) { /* a broken listener mustn't stop sync */ }
+  }
+}
+
+// ---- Activity log -----------------------------------------------------------
+// Kept so "it said an error and I had to toggle it off and on" becomes
+// something you can actually read back afterwards.
+
+const LOG_KEY = "shelf.syncLog";
+const LOG_MAX = 60;
+let logEntries = [];
+
+export function getLog() {
+  return [...logEntries].reverse(); // newest first
+}
+
+async function loadLog() {
+  try { logEntries = (await db.getSetting(LOG_KEY)) || []; } catch (_) { logEntries = []; }
+}
+
+async function log(kind, text) {
+  logEntries.push({ at: new Date().toISOString(), kind, text });
+  if (logEntries.length > LOG_MAX) logEntries = logEntries.slice(-LOG_MAX);
+  try { await db.saveSetting(LOG_KEY, logEntries); } catch (_) { /* log is a nicety */ }
+  setState({});
+}
+
+export async function clearLog() {
+  logEntries = [];
+  try { await db.saveSetting(LOG_KEY, []); } catch (_) {}
+  setState({});
+}
+
+// ---- Connecting -------------------------------------------------------------
+
+let authWatch = null;
+let authSettled = null;
+
 export async function init() {
   if (!isConfigured()) return null;
-  const s = await loadSdk();
+  await loadLog();
+  setState({ phase: "connecting", error: null });
+  let s;
+  try {
+    s = await loadSdk();
+  } catch (err) {
+    setState({ phase: "error", error: err.message });
+    await log("error", err.message);
+    scheduleRetry();
+    throw err;
+  }
+
   if (!app) {
     app = s.initializeApp(getConfig());
     auth = s.getAuth(app);
     store = s.getFirestore(app);
   }
-  // Restore an existing session without prompting. The listener is torn down
-  // *after* the wait rather than inside the callback: it can fire immediately,
-  // before the unsubscribe function has even been returned, and reaching for
-  // it from inside the callback then throws.
-  let unsub = null;
-  await new Promise((resolve) => {
-    unsub = s.onAuthStateChanged(auth, (u) => {
-      user = u || null;
-      resolve();
+
+  // A permanent listener, not a one-shot. Firebase restores a saved session
+  // asynchronously and can also drop or refresh it later; watching for the
+  // whole life of the page is what keeps the button honest.
+  if (!authWatch) {
+    authSettled = new Promise((resolve) => {
+      let first = true;
+      authWatch = s.onAuthStateChanged(auth, (u) => {
+        user = u || null;
+        if (user) {
+          setState({ phase: "online", account: getAccount().username, error: null });
+          startLive();
+          nudgeSync();
+        } else {
+          stopLive();
+          setState({ phase: "off", account: null });
+        }
+        if (first) { first = false; resolve(); }
+      });
     });
-  });
-  try { if (unsub) unsub(); } catch (_) { /* already gone */ }
+  }
+  await authSettled;
   return getAccount();
 }
 
@@ -108,15 +194,75 @@ export async function signIn() {
   const s = await loadSdk();
   if (!app) await init();
   const provider = new s.GoogleAuthProvider();
-  const result = await s.signInWithPopup(auth, provider);
-  user = result.user;
-  return getAccount();
+  try {
+    const result = await s.signInWithPopup(auth, provider);
+    user = result.user;
+    setState({ phase: "online", account: getAccount().username, error: null });
+    await log("ok", `Signed in as ${getAccount().username}`);
+    return getAccount();
+  } catch (err) {
+    setState({ phase: "error", error: err.message });
+    await log("error", `Sign-in failed: ${err.message}`);
+    throw err;
+  }
 }
 
 export async function signOutFirebase() {
   stopLive();
+  cancelRetry();
   if (auth && sdk) await sdk.signOut(auth).catch(() => {});
   user = null;
+  setState({ phase: "off", account: null, error: null });
+  await log("ok", "Sync turned off");
+}
+
+// ---- Recovering by itself ---------------------------------------------------
+// A dropped connection, a sleeping tablet or a moment offline used to leave
+// sync stuck showing an error until it was turned off and on by hand. It now
+// backs off and tries again, and wakes straight up when the network or the
+// app comes back.
+
+const BACKOFF_MS = [5000, 15000, 60000, 300000];
+let retryStep = 0;
+let retryTimer = null;
+
+function cancelRetry() {
+  clearTimeout(retryTimer);
+  retryTimer = null;
+  retryStep = 0;
+  if (state.retryAt) setState({ retryAt: null });
+}
+
+function scheduleRetry() {
+  clearTimeout(retryTimer);
+  const wait = BACKOFF_MS[Math.min(retryStep, BACKOFF_MS.length - 1)];
+  retryStep++;
+  setState({ retryAt: new Date(Date.now() + wait).toISOString() });
+  retryTimer = setTimeout(() => { reconnect().catch(() => {}); }, wait);
+}
+
+export async function reconnect() {
+  cancelRetry();
+  if (!isConfigured()) return { ok: false, reason: "not-configured" };
+  if (!user) {
+    await init();
+    if (!user) return { ok: false, reason: "not-signed-in" };
+  }
+  return syncNow();
+}
+
+if (typeof window !== "undefined") {
+  window.addEventListener("online", () => {
+    if (state.phase === "error" || state.phase === "offline") reconnect().catch(() => {});
+  });
+  window.addEventListener("offline", () => {
+    if (user) setState({ phase: "offline" });
+  });
+  document.addEventListener("visibilitychange", () => {
+    if (document.visibilityState !== "visible") return;
+    if (state.phase === "error" || state.phase === "offline") reconnect().catch(() => {});
+    else if (user) nudgeSync();
+  });
 }
 
 function docId(key) {
@@ -151,14 +297,45 @@ const ms = (v) => (v ? Date.parse(v) || 0 : 0);
 // and the book it was carrying quietly stays empty.
 let activeRun = null;
 
-export function syncNow(onProgress = null) {
+export function syncNow(onProgress = null, direction = "both") {
   if (activeRun) return activeRun;
-  activeRun = runSync(onProgress).finally(() => { activeRun = null; });
+  activeRun = runSync(onProgress, direction)
+    .then(async (r) => {
+      if (r && r.ok) {
+        cancelRetry();
+        const bits = [];
+        if (r.filesPulled) bits.push(`${r.filesPulled} book${r.filesPulled === 1 ? "" : "s"} in`);
+        if (r.filesPushed) bits.push(`${r.filesPushed} out`);
+        if (r.pulled || r.pushed) bits.push(`${r.pulled} details in, ${r.pushed} out`);
+        await log(r.fileError ? "warn" : "ok",
+          (direction === "pull" ? "Pull" : direction === "push" ? "Push" : "Sync") +
+          (bits.length ? `: ${bits.join(", ")}` : ": nothing to do") +
+          (r.fileError ? ` — ${r.fileError}` : ""));
+        setState({ phase: navigator.onLine === false ? "offline" : "online", error: r.fileError || null, activity: null });
+      }
+      return r;
+    })
+    .catch(async (err) => {
+      // The one that used to need turning off and on again. It now records
+      // itself and arranges its own retry.
+      setState({ phase: "error", error: err.message, activity: null });
+      await log("error", err.message);
+      scheduleRetry();
+      return { ok: false, error: err.message };
+    })
+    .finally(() => { activeRun = null; });
   return activeRun;
 }
 
-async function runSync(onProgress) {
+export function pullNow(onProgress = null) { return syncNow(onProgress, "pull"); }
+export function pushNow(onProgress = null) { return syncNow(onProgress, "push"); }
+
+async function runSync(onProgress, direction = "both") {
   if (!user) return { ok: false, reason: "not-signed-in" };
+  const report = (a) => {
+    setState({ activity: a });
+    if (onProgress) onProgress(a);
+  };
   const s = await loadSdk();
   const uid = user.uid;
 
@@ -308,10 +485,11 @@ async function runSync(onProgress) {
     }
   }
 
-  const fileResult = await syncFiles(s, uid, onProgress);
+  const fileResult = await syncFiles(s, uid, report, direction);
 
   lastResult = { ok: true, pulled, pushed, ...fileResult };
   lastRunAt = new Date().toISOString();
+  setState({ lastRunAt, last: lastResult });
   return lastResult;
 }
 
@@ -319,7 +497,7 @@ async function runSync(onProgress) {
 // Runs after everything above, so shelves and positions appear immediately and
 // the (much slower) file transfer fills the covers in behind them.
 
-async function syncFiles(s, uid, onProgress) {
+async function syncFiles(s, uid, onProgress, direction = "both") {
   let index;
   try {
     index = await files.listRemoteFiles(s, store, uid);
@@ -361,7 +539,7 @@ async function syncFiles(s, uid, onProgress) {
   }
 
   let n = 0;
-  for (const meta of waiting) {
+  for (const meta of (direction === "push" ? [] : waiting)) {
     const id = docId(bookKey(meta));
     const info = index.get(id);
     n++;
@@ -412,7 +590,7 @@ async function syncFiles(s, uid, onProgress) {
   sized.sort((a, b) => a.blob.size - b.blob.size);
 
   n = 0;
-  for (const { meta, blob } of sized) {
+  for (const { meta, blob } of (direction === "pull" ? [] : sized)) {
     n++;
     if (blob.size > files.MAX_BOOK_BYTES) {
       tooLarge.push(meta.title);
@@ -547,10 +725,17 @@ function nudgeSync() {
 
 let liveProgress = null;
 
-export function startLive(onChange, onProgress = null) {
-  if (!user || !sdk || unsubscribers.length) return;
+// Registered once by the app. Live sync now starts itself the moment the
+// session is known to be valid, which happens inside the auth listener rather
+// than at a point the app controls — so the callbacks have to be waiting here
+// beforehand rather than being handed over at start time.
+export function configureLive({ onChange = null, onProgress = null } = {}) {
   onRemoteChange = onChange;
   liveProgress = onProgress;
+}
+
+export function startLive() {
+  if (!user || !sdk || unsubscribers.length) return;
   const uid = user.uid;
   for (const path of ["books", "annotations", "shelves", "files"]) {
     const stop = sdk.onSnapshot(
@@ -561,7 +746,14 @@ export function startLive(onChange, onProgress = null) {
         if (!fromElsewhere) return;
         nudgeSync();
       },
-      () => {} // a dropped listener shouldn't throw into the app
+      (err) => {
+        // A listener dropping is how a lost connection or a rules change shows
+        // up. Recording it and retrying beats going quiet.
+        setState({ phase: "error", error: err && err.message ? err.message : "Live updates stopped" });
+        log("error", `Live updates stopped: ${err && err.message ? err.message : "unknown"}`);
+        stopLive();
+        scheduleRetry();
+      }
     );
     unsubscribers.push(stop);
   }

@@ -247,18 +247,32 @@
        retry rather than a feeling. -->
   <div id="trackerOverlay" class="setup-overlay hidden">
     <div class="setup-card tracker-card">
-      <h2>Books on this device</h2>
+      <h2>Sync</h2>
+      <!-- Connection first: nothing below it makes sense until you know
+           whether the app is actually talking to anything. -->
+      <div class="conn-bar" id="connBar">
+        <span class="conn-dot" id="connDot"></span>
+        <span class="conn-text" id="connText"></span>
+        <span class="spacer"></span>
+        <button class="btn" id="connFixBtn">Reconnect</button>
+      </div>
       <div class="tracker-summary" id="trackerSummary"></div>
+      <div class="sync-actions">
+        <button class="btn" id="pullBtn" title="Fetch everything from your other devices">↓ Pull</button>
+        <button class="btn" id="pushBtn" title="Send this device's books and progress up">↑ Push</button>
+        <button class="btn" id="trackerRefresh">⟳ Sync both ways</button>
+        <span class="spacer"></span>
+        <button class="btn primary" id="trackerRetry">Retry missing</button>
+      </div>
       <div class="tracker-filters" id="trackerFilters">
-        <button class="chip active" data-filter="all">All</button>
+        <button class="chip active" data-filter="all">Books</button>
         <button class="chip" data-filter="missing">Not here yet</button>
         <button class="chip" data-filter="problem">Problems</button>
+        <button class="chip" data-filter="log">Activity</button>
       </div>
       <div class="tracker-list" id="trackerList"></div>
       <div class="setup-actions">
         <button class="btn" id="trackerClose">Close</button>
-        <button class="btn" id="trackerRefresh">Check again</button>
-        <button class="btn primary" id="trackerRetry">Retry missing</button>
       </div>
     </div>
   </div>

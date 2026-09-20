@@ -521,6 +521,100 @@ export async function toggleBookInCustomShelf(shelfId, bookId) {
   return !has; // true if the book is now in the shelf
 }
 
+// Puts a batch of books on a shelf in one go, and optionally takes them off
+// the shelf they came from. One record write per shelf rather than one per
+// book, so filing twenty books is a single change that syncs as a single
+// change, rather than twenty that each race the others.
+export async function moveBooksToShelf(bookIds, targetShelfId, { removeFromShelfId = null } = {}) {
+  const ids = [...new Set(bookIds)].filter(Boolean);
+  if (!ids.length) return { added: 0, removed: 0 };
+  const shelves = await db.getAllShelves();
+  const now = new Date().toISOString();
+  let added = 0;
+  let removed = 0;
+
+  const target = shelves.find((s) => s.id === targetShelfId);
+  if (target) {
+    const before = target.bookIds.length;
+    target.bookIds = [...new Set([...target.bookIds, ...ids])];
+    added = target.bookIds.length - before;
+    target.updatedAt = now;
+    await db.saveShelfRecord(target);
+  }
+
+  // Only real shelves can have books taken off them; the smart shelves are
+  // computed from the books themselves, so there's nothing to remove from.
+  const source = removeFromShelfId && removeFromShelfId !== targetShelfId
+    ? shelves.find((s) => s.id === removeFromShelfId)
+    : null;
+  if (source) {
+    const before = source.bookIds.length;
+    source.bookIds = source.bookIds.filter((id) => !ids.includes(id));
+    removed = before - source.bookIds.length;
+    source.updatedAt = now;
+    await db.saveShelfRecord(source);
+  }
+
+  return { added, removed };
+}
+
+// How a shelf's books are ordered. Recent is the default because the book you
+// were last in is nearly always the one you want next; the rest are here for
+// finding something in a library too big to scan.
+export const SORT_MODES = [
+  { id: "recent", label: "Recently used" },
+  { id: "title", label: "Title A–Z" },
+  { id: "title-desc", label: "Title Z–A" },
+  { id: "progress", label: "Furthest read" },
+  { id: "unread", label: "Not started first" },
+  { id: "pages", label: "Longest first" },
+];
+
+const collator = new Intl.Collator(undefined, { sensitivity: "base", numeric: true });
+
+// Sorted on a cleaned-up title, so "The_Long_Road.pdf" files under L with the
+// rest of the library rather than under T with every other "The".
+export function sortKeyForTitle(title) {
+  return String(title || "")
+    .replace(/\.(epub|pdf)$/i, "")
+    .replace(/[_]+/g, " ")
+    .replace(/^(the|a|an)\s+/i, "")
+    .trim();
+}
+
+export function sortBooks(books, mode) {
+  const list = [...books];
+  switch (mode) {
+    case "title":
+      return list.sort((a, b) => collator.compare(sortKeyForTitle(a.title), sortKeyForTitle(b.title)));
+    case "title-desc":
+      return list.sort((a, b) => collator.compare(sortKeyForTitle(b.title), sortKeyForTitle(a.title)));
+    case "progress":
+      return list.sort((a, b) => (b.progress || 0) - (a.progress || 0));
+    case "unread":
+      return list.sort((a, b) => (a.progress || 0) - (b.progress || 0));
+    case "pages":
+      return list.sort((a, b) => (b.numPages || 0) - (a.numPages || 0));
+    default:
+      return list.sort((a, b) => new Date(b.updatedAt || 0) - new Date(a.updatedAt || 0));
+  }
+}
+
+// Matches a typed fragment against a book. Deliberately forgiving: underscores
+// and extensions are ignored, so typing "long" finds "The_Long_Road.pdf", and
+// each word can match separately so "road long" finds it too.
+export function bookMatches(book, query) {
+  const q = String(query || "").trim().toLowerCase();
+  if (!q) return true;
+  const haystack = [
+    book.title,
+    book.author,
+    book.format,
+    book.oneDriveFileName,
+  ].filter(Boolean).join(" ").replace(/[_.]+/g, " ").toLowerCase();
+  return q.split(/\s+/).every((word) => haystack.includes(word));
+}
+
 // Groups a shelf's books into sub-categories for display — this is the "a
 // shelf opens with different categories inside it" behavior. Format is the
 // one dimension every shelf can be usefully split by.

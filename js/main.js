@@ -512,26 +512,48 @@ async function connectFirebase() {
   if (!live.isConfigured()) { openSetup("firebase"); return; }
   try {
     toast("Connecting to Firebase…");
+    // init() installs the permanent auth listener, which starts live updates
+    // and a first sync by itself as soon as the session is known to be good.
     await live.init();
     if (!live.isSignedIn()) await live.signIn();
     const result = await live.syncNow(syncProgress);
     await renderLibrary();
-    live.startLive(afterRemoteChange, syncProgress);
     toast(describeSync(result));
   } catch (err) {
     toast(err.message);
   }
-  refreshFirebaseUI();
 }
 
+// Driven by the sync module's own state rather than by a flag read once at
+// startup, and re-run whenever that state changes — which is what stops the
+// menu offering to turn on sync that is already running.
+const PHASE_TEXT = {
+  off: "Not connected",
+  connecting: "Connecting…",
+  online: "Connected",
+  error: "Problem",
+  offline: "Offline",
+};
+
 function refreshFirebaseUI() {
-  const acc = live.getAccount();
-  el("firebaseBtn").textContent = acc
-    ? `Live sync: ${acc.username} · turn off`
-    : (live.isConfigured() ? "Turn on live sync" : "Connect Firebase…");
-  el("syncNowBtn").classList.toggle("hidden", !acc);
+  const st = live.state;
+  const connected = st.phase === "online" || st.phase === "offline" || st.phase === "error";
+  const signedIn = live.isSignedIn();
+
+  el("firebaseBtn").textContent = signedIn
+    ? `Live sync: ${st.account || "on"} · turn off`
+    : (st.phase === "connecting" ? "Connecting…"
+      : live.isConfigured() ? "Turn on live sync" : "Connect Firebase…");
+  el("syncNowBtn").classList.toggle("hidden", !signedIn);
+  el("trackerBtn").classList.toggle("hidden", !live.isConfigured());
   renderSyncStatus();
+  if (!el("trackerOverlay").classList.contains("hidden")) renderTracker();
+  return connected;
 }
+
+live.onStateChange(() => {
+  try { refreshFirebaseUI(); } catch (_) { /* before the DOM is wired */ }
+});
 
 // Says, in words, what the app can actually see: how many books are here, how
 // many are stored for the other device to collect, when that last happened and
@@ -594,7 +616,50 @@ function trackerMatches(row) {
   return true;
 }
 
+function renderConnection() {
+  const st = live.state;
+  const dotClass = { online: "ok", connecting: "wait", off: "off", offline: "warn", error: "bad" }[st.phase] || "off";
+  el("connDot").className = `conn-dot ${dotClass}`;
+
+  let text = PHASE_TEXT[st.phase] || "Unknown";
+  if (st.phase === "online" && st.account) text = `Connected as ${st.account}`;
+  if (st.phase === "offline") text = "Offline — changes are saved here and will go up when you're back";
+  if (st.phase === "error") {
+    text = `Problem: ${st.error || "unknown"}`;
+    if (st.retryAt) {
+      const secs = Math.max(1, Math.round((Date.parse(st.retryAt) - Date.now()) / 1000));
+      text += ` · retrying in ${secs}s`;
+    }
+  }
+  if (st.activity) {
+    const verb = st.activity.phase === "download" ? "Getting" : "Sending";
+    text = `${verb} ${st.activity.index} of ${st.activity.total} — ${st.activity.title}`;
+  }
+  el("connText").textContent = text;
+  el("connFixBtn").classList.toggle("hidden", st.phase === "online" || st.phase === "connecting");
+}
+
+function renderLog() {
+  const entries = live.getLog();
+  if (!entries.length) {
+    return `<p class="tracker-empty">Nothing recorded yet.</p>`;
+  }
+  return entries.map((e) => {
+    const when = new Date(e.at).toLocaleString([], { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });
+    return `<div class="log-row ${escapeHtml(e.kind)}">
+      <span class="log-when">${escapeHtml(when)}</span>
+      <span class="log-text">${escapeHtml(e.text)}</span>
+    </div>`;
+  }).join("");
+}
+
 async function renderTracker() {
+  renderConnection();
+  if (trackerFilter === "log") {
+    el("trackerSummary").innerHTML = "What sync has done recently, newest first.";
+    el("trackerList").innerHTML = renderLog();
+    return;
+  }
   const rows = await live.getLibraryState();
   const here = rows.filter((r) => r.state === "local").length;
   const problems = rows.filter((r) => ["failed", "missing", "toolarge", "nospace"].includes(r.state)).length;
@@ -638,10 +703,24 @@ async function renderTracker() {
   });
 }
 
+// While a retry is pending, the countdown has to actually count down —
+// a line reading "retrying in 5s" that never changes looks like it has hung,
+// which is exactly the impression this panel exists to dispel.
+let connTicker = null;
+
 function openTracker() {
   toggleProviderMenu(false);
   el("trackerOverlay").classList.remove("hidden");
   renderTracker();
+  clearInterval(connTicker);
+  connTicker = setInterval(() => {
+    if (el("trackerOverlay").classList.contains("hidden")) {
+      clearInterval(connTicker);
+      connTicker = null;
+      return;
+    }
+    if (live.state.retryAt || live.state.activity) renderConnection();
+  }, 1000);
 }
 
 el("trackerBtn").addEventListener("click", (e) => { e.stopPropagation(); openTracker(); });
@@ -655,12 +734,29 @@ el("trackerFilters").addEventListener("click", (e) => {
   renderTracker();
 });
 
-el("trackerRefresh").addEventListener("click", async () => {
-  toast("Checking…");
-  await live.syncNow(syncProgress).catch((err) => toast(err.message));
+// Pull, push and sync-both-ways as separate, named actions. "Sync" on its own
+// is a black box; being able to say "send what's here" or "fetch what's
+// there" is how you actually get out of a muddle.
+async function runSyncAction(label, fn) {
+  toast(`${label}…`);
+  const r = await fn().catch((err) => { toast(err.message); return null; });
   await renderTracker();
   await renderLibrary();
-});
+  if (r && r.ok) toast(describeSync(r));
+  else if (r && r.error) toast(`${label} failed: ${r.error}`);
+}
+
+el("pullBtn").addEventListener("click", () =>
+  runSyncAction("Pulling", () => live.pullNow(syncProgress)));
+
+el("pushBtn").addEventListener("click", () =>
+  runSyncAction("Pushing", () => live.pushNow(syncProgress)));
+
+el("trackerRefresh").addEventListener("click", () =>
+  runSyncAction("Syncing", () => live.syncNow(syncProgress)));
+
+el("connFixBtn").addEventListener("click", () =>
+  runSyncAction("Reconnecting", () => live.reconnect()));
 
 el("trackerRetry").addEventListener("click", async () => {
   toast("Retrying the books that aren't here…");
@@ -967,7 +1063,17 @@ function renderRacks(shelves) {
   }
 }
 
+// Opening a different shelf starts fresh: a search typed on one shelf still
+// applied to the next one, which made a shelf look half-empty for no visible
+// reason. Half-finished multi-select goes the same way.
+function resetPanelTools() {
+  panelQuery = "";
+  selectMode = false;
+  selectedBookIds.clear();
+}
+
 function openRack(shelfId) {
+  resetPanelTools();
   expandedShelfId = shelfId;
   browseMode = "shelf";
   renderLibrary();
@@ -1016,6 +1122,7 @@ function renderRail(shelves) {
       <span class="tab-count">${s.books.length}</span>
     `;
     tab.addEventListener("click", () => {
+      resetPanelTools();
       expandedShelfId = expandedShelfId === s.id ? null : s.id;
       renderLibrary();
     });
@@ -1118,9 +1225,43 @@ function startShelfRename(active) {
   input.addEventListener("blur", () => finish(true));
 }
 
+// ---- Finding, ordering and filing books ------------------------------------
+// A library you can't search is a pile. These three pieces of state drive the
+// open shelf: what's typed in the box, how the books are ordered, and whether
+// you're picking several to file somewhere else.
+// SORT_KEY is declared before it's read. `loadSortMode()` runs while this
+// module is still initialising, and a `const` declared further down the file
+// doesn't exist yet at that moment — reaching for it throws, the try/catch
+// swallows it, and the saved choice silently reverts to the default on every
+// launch. Declaration order is load-bearing here.
+const SORT_KEY = "shelf.sortMode";
+
+let panelQuery = "";
+let panelSort = loadSortMode();
+let selectMode = false;
+let selectedBookIds = new Set();
+
+function loadSortMode() {
+  try {
+    const saved = localStorage.getItem(SORT_KEY);
+    return shelf.SORT_MODES.some((m) => m.id === saved) ? saved : "recent";
+  } catch (_) {
+    return "recent";
+  }
+}
+
+function saveSortMode(mode) {
+  panelSort = mode;
+  try { localStorage.setItem(SORT_KEY, mode); } catch (_) { /* private mode */ }
+}
+
 function renderPanel(shelves) {
   const panel = el("shelfPanel");
   const active = shelves.find((s) => s.id === expandedShelfId);
+  const customShelfOptions = shelves
+    .filter((s) => s.kind === "custom" && s.id !== expandedShelfId)
+    .map((s) => `<option value="${escapeHtml(s.id)}">${escapeHtml(s.name)}</option>`)
+    .join("");
 
   if (!active) {
     panel.innerHTML = `<div class="empty-state" id="emptyState">
@@ -1130,27 +1271,67 @@ function renderPanel(shelves) {
     return;
   }
 
+  // Search first, then sort — so the order you chose applies to what you can
+  // actually see, which is what you'd expect from any list of things.
+  const matching = active.books.filter((b) => shelf.bookMatches(b, panelQuery));
+  const visible = shelf.sortBooks(matching, panelSort);
+  const filtering = !!panelQuery.trim();
+
+  const sortOptions = shelf.SORT_MODES
+    .map((m) => `<option value="${m.id}"${m.id === panelSort ? " selected" : ""}>${escapeHtml(m.label)}</option>`)
+    .join("");
+
   const header = `
     <div class="shelf-panel-header">
       <h2 id="shelfTitle">${escapeHtml(active.name)}</h2>
       ${active.kind === "custom"
         ? `<button class="shelf-rename-btn" id="renameShelfBtn" title="Rename this shelf" aria-label="Rename this shelf">✎</button>`
         : ""}
-      <span class="book-sub">${active.books.length} book${active.books.length === 1 ? "" : "s"}</span>
+      <span class="book-sub">${filtering
+        ? `${visible.length} of ${active.books.length}`
+        : `${active.books.length} book${active.books.length === 1 ? "" : "s"}`}</span>
       ${active.id === "smart:duplicates" ? `<button class="btn primary" id="tidyDupesBtn">Hide duplicates</button>` : ""}
       ${active.kind === "custom" ? `<button class="shelf-delete-btn" id="deleteShelfBtn">Delete shelf</button>` : ""}
     </div>
+    <div class="shelf-tools">
+      <div class="shelf-search">
+        <span class="search-icon" aria-hidden="true">⌕</span>
+        <input type="search" id="shelfSearch" placeholder="Find a book…"
+               value="${escapeHtml(panelQuery)}" autocomplete="off"
+               aria-label="Find a book on this shelf" />
+        ${panelQuery ? `<button class="search-clear" id="shelfSearchClear" aria-label="Clear search">×</button>` : ""}
+      </div>
+      <select class="btn shelf-sort" id="shelfSort" aria-label="Sort books">${sortOptions}</select>
+      <button class="btn shelf-select-btn${selectMode ? " on" : ""}" id="shelfSelectBtn">
+        ${selectMode ? "Done" : "Select"}
+      </button>
+    </div>
+    ${selectMode ? `
+      <div class="shelf-selection">
+        <span class="sel-count"><b id="shelfSelectCount">${selectedBookIds.size}</b> selected</span>
+        <button class="btn" id="selAllBtn">Select all${filtering ? " matching" : ""}</button>
+        <button class="btn" id="selNoneBtn">Clear</button>
+        <span class="spacer"></span>
+        <select class="btn" id="moveTargetSelect" aria-label="Shelf to move to">
+          <option value="">Move to shelf…</option>
+          ${customShelfOptions}
+          <option value="__new__">New shelf…</option>
+        </select>
+      </div>` : ""}
   `;
 
   if (active.books.length === 0) {
     panel.innerHTML = header + `<div class="empty-state">Nothing on this shelf yet.</div>`;
+  } else if (visible.length === 0) {
+    panel.innerHTML = header +
+      `<div class="empty-state">Nothing on this shelf matches “${escapeHtml(panelQuery)}”.</div>`;
   } else {
     // One board per row of books, stacked down the page — a bookcase rather
     // than a single long shelf you scroll sideways. Books are no longer split
     // by format: EPUB and PDF each have their own shelf in the rail already,
     // so splitting again in here just made "All Books" look different from
     // every other shelf for no reason.
-    const rows = chunk(active.books, booksPerRow());
+    const rows = chunk(visible, booksPerRow());
     panel.innerHTML = header + rows
       .map((_, i) => `
         <div class="shelf-row">
@@ -1163,6 +1344,8 @@ function renderPanel(shelves) {
       for (const book of row) gridEl.appendChild(renderBookCard(book));
     });
   }
+
+  wirePanelTools(active, visible);
 
   const renameBtn = el("renameShelfBtn");
   if (renameBtn) renameBtn.addEventListener("click", () => startShelfRename(active));
@@ -1185,6 +1368,101 @@ function renderPanel(shelves) {
       await renderLibrary();
     });
   }
+}
+
+function wirePanelTools(active, visible) {
+  const search = el("shelfSearch");
+  if (search) {
+    // Re-rendering on every keystroke would rebuild the whole shelf and lose
+    // focus mid-word, so the box keeps its own value and the shelf catches up
+    // a beat later, with the caret restored exactly where it was.
+    const onType = debounce(async () => {
+      const caret = search.selectionStart;
+      panelQuery = search.value;
+      await renderLibrary();
+      const again = el("shelfSearch");
+      if (again) {
+        again.focus();
+        try { again.setSelectionRange(caret, caret); } catch (_) { /* not a text input */ }
+      }
+    }, 180);
+    search.addEventListener("input", onType);
+    search.addEventListener("keydown", (e) => {
+      if (e.key === "Escape") { search.value = ""; panelQuery = ""; renderLibrary(); }
+    });
+  }
+
+  const clearBtn = el("shelfSearchClear");
+  if (clearBtn) clearBtn.addEventListener("click", async () => {
+    panelQuery = "";
+    await renderLibrary();
+    const again = el("shelfSearch");
+    if (again) again.focus();
+  });
+
+  const sortSel = el("shelfSort");
+  if (sortSel) sortSel.addEventListener("change", async () => {
+    saveSortMode(sortSel.value);
+    await renderLibrary();
+  });
+
+  const selBtn = el("shelfSelectBtn");
+  if (selBtn) selBtn.addEventListener("click", async () => {
+    selectMode = !selectMode;
+    if (!selectMode) selectedBookIds.clear();
+    await renderLibrary();
+  });
+
+  const selAll = el("selAllBtn");
+  if (selAll) selAll.addEventListener("click", async () => {
+    for (const b of visible) selectedBookIds.add(b.id);
+    await renderLibrary();
+  });
+
+  const selNone = el("selNoneBtn");
+  if (selNone) selNone.addEventListener("click", async () => {
+    selectedBookIds.clear();
+    await renderLibrary();
+  });
+
+  const moveSel = el("moveTargetSelect");
+  if (moveSel) moveSel.addEventListener("change", async () => {
+    const choice = moveSel.value;
+    moveSel.value = "";
+    if (!choice) return;
+    if (selectedBookIds.size === 0) { toast("Pick some books first"); return; }
+
+    let targetId = choice;
+    let targetName = moveSel.options[moveSel.selectedIndex]?.text;
+    if (choice === "__new__") {
+      const name = prompt("Name for the new shelf");
+      if (!name || !name.trim()) return;
+      targetId = await shelf.createCustomShelf(name.trim());
+      targetName = name.trim();
+    }
+
+    const ids = [...selectedBookIds];
+    // Taking them off the shelf you're looking at only makes sense when it's
+    // a real shelf — the smart ones are worked out from the books themselves.
+    const { added } = await shelf.moveBooksToShelf(ids, targetId, {
+      removeFromShelfId: active.kind === "custom" ? active.id : null,
+    });
+    selectedBookIds.clear();
+    selectMode = false;
+    toast(added
+      ? `Moved ${ids.length} book${ids.length === 1 ? "" : "s"} to "${targetName}"`
+      : `Already on "${targetName}"`);
+    await renderLibrary();
+    live.pushSoon();
+  });
+}
+
+function debounce(fn, ms) {
+  let t;
+  return (...args) => {
+    clearTimeout(t);
+    t = setTimeout(() => fn(...args), ms);
+  };
 }
 
 // Filenames make poor cover text — underscores, extensions, and far more
@@ -1236,6 +1514,27 @@ function renderBookCard(book) {
     e.stopPropagation();
     toggleShelfMenu(book, e.currentTarget);
   });
+
+  // While picking books to file, a tap selects rather than opens — opening a
+  // book halfway through choosing twelve of them would lose the lot.
+  if (selectMode) {
+    card.classList.add("selectable");
+    card.classList.toggle("selected", selectedBookIds.has(book.id));
+    const tick = document.createElement("span");
+    tick.className = "select-tick";
+    tick.textContent = selectedBookIds.has(book.id) ? "✓" : "";
+    card.querySelector(".book-cover").appendChild(tick);
+    card.addEventListener("click", () => {
+      if (selectedBookIds.has(book.id)) selectedBookIds.delete(book.id);
+      else selectedBookIds.add(book.id);
+      card.classList.toggle("selected", selectedBookIds.has(book.id));
+      tick.textContent = selectedBookIds.has(book.id) ? "✓" : "";
+      const count = el("shelfSelectCount");
+      if (count) count.textContent = String(selectedBookIds.size);
+    });
+    return card;
+  }
+
   card.addEventListener("click", () => openBook(book, card.querySelector(".book-cover")));
   return card;
 }
@@ -1747,15 +2046,16 @@ el("versionChip").addEventListener("click", async () => {
   // Firebase is unreachable the app just carries on locally.
   try {
     if (live.isConfigured()) {
+      live.configureLive({ onChange: afterRemoteChange, onProgress: syncProgress });
       await live.init();
       if (live.isSignedIn()) {
         await live.syncNow(syncProgress);
         await renderLibrary();
-        live.startLive(afterRemoteChange, syncProgress);
       }
     }
   } catch (err) {
+    // Not fatal, and no longer a dead end: the connection state now says so
+    // in the sync panel and retries on its own.
     console.warn("Live sync unavailable:", err.message);
   }
-  refreshFirebaseUI();
 })();
