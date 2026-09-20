@@ -5,7 +5,7 @@
 // every cache that isn't the current name, which is what forces an already
 // installed copy on a tablet to pick up the new files instead of serving the
 // old ones forever.
-const CACHE_NAME = "shelf-shell-v1.19.0";
+const CACHE_NAME = "shelf-shell-v1.20.0";
 const SHELL_FILES = [
   "./",
   "./index.html",

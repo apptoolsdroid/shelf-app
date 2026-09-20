@@ -96,9 +96,16 @@ export async function openEpub({ container, blob, savedLocation, onLocation, onT
   // Screen-size adjustment: re-flow columns/pagination whenever the reader's
   // available space changes (rotation, split-screen on iPad, window resize),
   // then jump back to exactly where the reader was.
+  // Only re-flow when the space actually changed. Re-displaying the chapter
+  // for a resize notification that changed nothing makes the text flash.
+  let flowedFor = { w: 0, h: 0 };
   resizeObserver = new ResizeObserver(
     debounce(() => {
-      rendition.resize(containerEl.clientWidth, containerEl.clientHeight);
+      const w = containerEl.clientWidth;
+      const h = containerEl.clientHeight;
+      if (Math.abs(w - flowedFor.w) < 4 && Math.abs(h - flowedFor.h) < 4) return;
+      flowedFor = { w, h };
+      rendition.resize(w, h);
       if (lastCfi) rendition.display(lastCfi);
     }, 200)
   );

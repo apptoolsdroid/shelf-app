@@ -79,9 +79,23 @@ export async function openPdf({ container, blob, savedState, onState }) {
   await render();
 }
 
+// Remembers the size the current pages were built for. iOS in particular
+// fires resize notifications that don't actually change anything, and
+// re-rendering for those is what made the page blink while a book loaded.
+let renderedForSize = { w: 0, h: 0 };
+
 function attachResizeHandling() {
   if (resizeObserver) resizeObserver.disconnect();
-  resizeObserver = new ResizeObserver(debounce(() => render(), 150));
+  renderedForSize = { w: 0, h: 0 };
+  resizeObserver = new ResizeObserver(
+    debounce(() => {
+      const w = containerEl.clientWidth;
+      const h = containerEl.clientHeight;
+      // A couple of pixels of drift is noise, not a rotation.
+      if (Math.abs(w - renderedForSize.w) < 4 && Math.abs(h - renderedForSize.h) < 4) return;
+      render();
+    }, 150)
+  );
   resizeObserver.observe(containerEl);
 }
 
@@ -274,33 +288,43 @@ function drawSavedUnderlines(layerEl, viewport, pageNum) {
 
 // ---- Top-level render dispatch ---------------------------------------------
 
+let renderToken = 0;
+
 async function render() {
   if (!pdfDoc) return;
+  renderedForSize = { w: containerEl.clientWidth, h: containerEl.clientHeight };
   if (viewMode === "scroll") await renderScrollView();
   else await renderPagedView();
   notifyState();
 }
 
 async function renderPagedView() {
+  const myToken = ++renderToken;
   const pages = viewMode === "double" ? getSpreadPages(currentPage) : [currentPage];
   currentPage = pages[0];
   const scale = currentScale(pages.length);
 
-  containerEl.style.alignItems = "center";
-  containerEl.innerHTML = "";
+  // Built detached from the document, so the reader keeps showing the page it
+  // already has until the new one is completely ready. Clearing first and
+  // filling afterwards is what produced a blank flash on every redraw —
+  // barely visible on a fast screen, very visible on a Retina tablet where
+  // each canvas is four times the pixels.
   const stage = document.createElement("div");
   stage.className = "pdf-stage";
   Object.assign(stage.style, { display: "flex", gap: "12px", margin: "auto" });
-  containerEl.appendChild(stage);
 
   for (const p of pages) {
     stage.appendChild(await buildPageEl(p, scale));
+    if (myToken !== renderToken) return; // a newer render started; drop this one
   }
+
+  if (myToken !== renderToken) return;
+  containerEl.style.alignItems = "center";
+  containerEl.replaceChildren(stage);
 }
 
 async function renderScrollView() {
-  containerEl.style.alignItems = "flex-start";
-  containerEl.innerHTML = "";
+  const myToken = ++renderToken;
   renderedScrollPages.clear();
   const scale = currentScale(1);
   const scrollWrap = document.createElement("div");
@@ -318,7 +342,9 @@ async function renderScrollView() {
     Object.assign(ph.style, { width: `${estW}px`, height: `${estH}px`, flexShrink: "0" });
     scrollWrap.appendChild(ph);
   }
-  containerEl.appendChild(scrollWrap);
+  if (myToken !== renderToken) return;
+  containerEl.style.alignItems = "flex-start";
+  containerEl.replaceChildren(scrollWrap);
 
   if (scrollObserver) scrollObserver.disconnect();
   scrollObserver = new IntersectionObserver(
