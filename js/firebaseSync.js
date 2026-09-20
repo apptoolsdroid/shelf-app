@@ -14,7 +14,8 @@
 // local database id, because the same book has a different id on each device.
 // ============================================================================
 import * as db from "./db.js";
-import { bookKey, savePlaceholder } from "./bookshelf.js";
+import { bookKey, savePlaceholder, adoptFileIntoPlaceholder } from "./bookshelf.js";
+import * as files from "./fileSync.js";
 
 const CONFIG_KEY = "shelf.firebaseConfig";
 const SDK_VERSION_KEY = "shelf.firebaseSdkVersion";
@@ -144,7 +145,7 @@ const ms = (v) => (v ? Date.parse(v) || 0 : 0);
 // same book's annotations within seconds of each other is not a real scenario
 // here, and a simple rule you can reason about beats a clever one you can't.
 
-export async function syncNow() {
+export async function syncNow(onProgress = null) {
   if (!user) return { ok: false, reason: "not-signed-in" };
   const s = await loadSdk();
   const uid = user.uid;
@@ -295,27 +296,114 @@ export async function syncNow() {
     }
   }
 
-  return { ok: true, pulled, pushed };
+  const fileResult = await syncFiles(s, uid, onProgress);
+
+  return { ok: true, pulled, pushed, ...fileResult };
+}
+
+// ---- The book files themselves ----------------------------------------------
+// Runs after everything above, so shelves and positions appear immediately and
+// the (much slower) file transfer fills the covers in behind them.
+
+async function syncFiles(s, uid, onProgress) {
+  const index = await files.listRemoteFiles(s, store, uid);
+  let filesPulled = 0;
+  let filesPushed = 0;
+  const tooLarge = [];
+
+  const books = await db.getAllBooks();
+
+  // Down first: a book waiting on this device is what the reader is actually
+  // looking at, so it matters more than backing up one they already have.
+  const waiting = books.filter((b) => b.placeholder && index.has(docId(bookKey(b))));
+  let n = 0;
+  for (const meta of waiting) {
+    const id = docId(bookKey(meta));
+    const info = index.get(id);
+    n++;
+    if (onProgress) onProgress({ phase: "download", index: n, total: waiting.length, title: meta.title });
+    try {
+      const blob = await files.pullFile(s, store, uid, id, info);
+      if (!blob) continue; // incomplete upload; leave it importable by hand
+      await adoptFileIntoPlaceholder(meta.id, new File([blob], info.name || `${meta.title}.${info.format || meta.format}`));
+      filesPulled++;
+    } catch (_) { /* one unreadable book shouldn't stop the rest */ }
+  }
+
+  // Up second, smallest first, so a library with one enormous PDF in it still
+  // gets most of its books across quickly.
+  let budget = files.LIBRARY_BUDGET_BYTES - files.totalStoredBytes(index);
+  const mine = books.filter((b) => !b.placeholder && !index.has(docId(bookKey(b))));
+  const sized = [];
+  for (const meta of mine) {
+    const blob = await db.getBookFile(meta.id);
+    if (blob) sized.push({ meta, blob });
+  }
+  sized.sort((a, b) => a.blob.size - b.blob.size);
+
+  n = 0;
+  for (const { meta, blob } of sized) {
+    n++;
+    if (blob.size > files.MAX_BOOK_BYTES || blob.size > budget) {
+      tooLarge.push(meta.title);
+      continue;
+    }
+    if (onProgress) onProgress({ phase: "upload", index: n, total: sized.length, title: meta.title });
+    try {
+      await files.pushFile(s, store, uid, docId(bookKey(meta)), blob, {
+        name: meta.oneDriveFileName || `${meta.title}.${meta.format}`,
+        format: meta.format,
+      });
+      budget -= blob.size;
+      filesPushed++;
+    } catch (_) { /* out of quota or offline — try again next sync */ }
+  }
+
+  return { filesPulled, filesPushed, tooLarge };
 }
 
 // ---- Live updates -----------------------------------------------------------
 // This is what makes it feel automatic: a change on another device arrives
 // here without anyone tapping anything.
 
-export function startLive(onChange) {
+let syncTimer = null;
+let syncInFlight = false;
+let syncQueued = false;
+
+// Four collections are watched, and one change on another device typically
+// touches several of them at once. Without this they'd each kick off a full
+// sync, doing the same work three or four times over and burning through the
+// free tier's daily read allowance for no benefit. Nudges are coalesced into
+// one run, and a nudge arriving mid-run queues exactly one more.
+function nudgeSync() {
+  if (syncInFlight) { syncQueued = true; return; }
+  clearTimeout(syncTimer);
+  syncTimer = setTimeout(async () => {
+    syncInFlight = true;
+    try {
+      const r = await syncNow(liveProgress);
+      if (r.ok && (r.pulled || r.filesPulled) && onRemoteChange) onRemoteChange(r);
+    } catch (_) { /* transient; the next change will try again */ }
+    syncInFlight = false;
+    if (syncQueued) { syncQueued = false; nudgeSync(); }
+  }, 1200);
+}
+
+let liveProgress = null;
+
+export function startLive(onChange, onProgress = null) {
   if (!user || !sdk || unsubscribers.length) return;
   onRemoteChange = onChange;
+  liveProgress = onProgress;
   const uid = user.uid;
-  for (const path of ["books", "annotations", "shelves"]) {
+  for (const path of ["books", "annotations", "shelves", "files"]) {
     const stop = sdk.onSnapshot(
       sdk.collection(store, `users/${uid}/${path}`),
       (snap) => {
         // Ignore the echo of our own writes; only react to another device.
         const fromElsewhere = snap.docChanges().some((c) => !c.doc.metadata.hasPendingWrites);
         if (!fromElsewhere) return;
-        syncNow().then((r) => {
-          if (r.ok && r.pulled && onRemoteChange) onRemoteChange(r);
-        }).catch(() => {});
+        nudgeSync();
       },
       () => {} // a dropped listener shouldn't throw into the app
     );
@@ -323,7 +411,15 @@ export function startLive(onChange) {
   }
 }
 
+// Called when a book is closed, so the place you reached travels now rather
+// than waiting for the next time the app starts.
+export function pushSoon() {
+  if (user) nudgeSync();
+}
+
 export function stopLive() {
+  clearTimeout(syncTimer);
+  syncQueued = false;
   for (const stop of unsubscribers) {
     try { stop(); } catch (_) {}
   }

@@ -335,10 +335,10 @@ const SETUP_COPY = {
     storageKey: "shelf.firebaseConfig",
     inputLabel: "",
     blob: true,
-    intro: "Firebase keeps your reading positions, shelves, highlights and notes " +
-           "in step across devices automatically — no Sync button. Book files stay " +
-           "on each device, so this sits comfortably inside Google's free tier and " +
-           "needs no payment details.",
+    intro: "Firebase keeps your books, shelves, reading positions, highlights and " +
+           "notes in step across devices automatically — no Sync button. Sign in on " +
+           "a second device and your library arrives on its own. It stays inside " +
+           "Google's free tier and needs no payment details.",
     steps: [
       'Open <a href="https://console.firebase.google.com" target="_blank" rel="noopener">console.firebase.google.com</a> and create a project (Analytics can be off).',
       'Click the <strong>&lt;/&gt;</strong> web icon to add a web app, and copy the <code>firebaseConfig</code> block it shows you.',
@@ -347,9 +347,10 @@ const SETUP_COPY = {
       'In <strong>Authentication → Settings → Authorised domains</strong>, add the address below.',
       'Paste the config block into the box underneath.',
     ],
-    note: "Stay on the free Spark plan. Only reading positions, shelves and annotations are " +
-          "stored — all small text — so the free allowance is far more than a personal library " +
-          "will ever use, and no card is required.",
+    note: "Stay on the free Spark plan — no card is required, and if you ever did reach a " +
+          "limit, syncing simply pauses rather than costing anything. Books travel through " +
+          "Firestore's free gigabyte, which holds a sizeable library; anything over 45 MB is " +
+          "left for you to import by hand, and the app says which ones.",
   },
   onedrive: {
     title: "Connect Microsoft OneDrive",
@@ -470,9 +471,37 @@ el("setupSave").addEventListener("click", async () => {
 
 // ---- Firebase live sync -----------------------------------------------------
 
-function afterRemoteChange() {
+function afterRemoteChange(result) {
   renderLibrary();
-  toast("Updated from your other device");
+  if (result && result.filesPulled) {
+    toast(result.filesPulled === 1
+      ? "A book arrived from your other device"
+      : `${result.filesPulled} books arrived from your other device`);
+  } else {
+    toast("Updated from your other device");
+  }
+}
+
+// Book files can take a while to travel, so say what's happening rather than
+// leaving a shelf of dashed covers looking stuck.
+function syncProgress(p) {
+  if (!p) return;
+  const verb = p.phase === "download" ? "Getting" : "Sending";
+  toast(`${verb} ${p.index} of ${p.total} — ${p.title}`);
+}
+
+// Summarises a finished sync in one line, including the books that are too
+// big to travel this way, since those are the only ones still needing a hand.
+function describeSync(r) {
+  const bits = [];
+  if (r.filesPulled) bits.push(`${r.filesPulled} book${r.filesPulled === 1 ? "" : "s"} in`);
+  if (r.filesPushed) bits.push(`${r.filesPushed} out`);
+  if (!bits.length) bits.push(`${r.pulled} in, ${r.pushed} out`);
+  let line = `Sync on — ${bits.join(", ")}`;
+  if (r.tooLarge && r.tooLarge.length) {
+    line += ` · ${r.tooLarge.length} too large to sync, add ${r.tooLarge.length === 1 ? "it" : "them"} by hand`;
+  }
+  return line;
 }
 
 async function connectFirebase() {
@@ -481,10 +510,10 @@ async function connectFirebase() {
     toast("Connecting to Firebase…");
     await live.init();
     if (!live.isSignedIn()) await live.signIn();
-    const result = await live.syncNow();
+    const result = await live.syncNow(syncProgress);
     await renderLibrary();
-    live.startLive(afterRemoteChange);
-    toast(`Live sync on — ${result.pulled} in, ${result.pushed} out`);
+    live.startLive(afterRemoteChange, syncProgress);
+    toast(describeSync(result));
   } catch (err) {
     toast(err.message);
   }
@@ -1267,6 +1296,10 @@ async function closeBook() {
     await annotations.saveToOneDrive(currentBookMeta).catch(() => {});
   }
   closeNotes();
+  // Send the place you reached now, rather than at the next app start —
+  // closing a book is exactly when you're most likely to pick up the other
+  // device. The nudge is debounced and coalesced, so this is cheap.
+  live.pushSoon();
   pdfReader.setInkTool(false);
   refreshInkButtons();
   const closedBookId = currentBookMeta ? currentBookMeta.id : null;
@@ -1549,9 +1582,9 @@ el("versionChip").addEventListener("click", async () => {
     if (live.isConfigured()) {
       await live.init();
       if (live.isSignedIn()) {
-        await live.syncNow();
+        await live.syncNow(syncProgress);
         await renderLibrary();
-        live.startLive(afterRemoteChange);
+        live.startLive(afterRemoteChange, syncProgress);
       }
     }
   } catch (err) {

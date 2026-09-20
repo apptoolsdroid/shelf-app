@@ -197,20 +197,28 @@ read, underline, bookmark, categorise, and offline access.
 
 ## Live sync of reading positions (Firebase, free)
 
-**Sign in → Connect Firebase…** sets up automatic syncing of your reading
-positions, shelves, highlights, ink and notes across devices — no Sync button,
-changes just appear. Book files are deliberately excluded: they'd need Cloud
-Storage, which now requires a billed plan, whereas everything else is small
-text that sits comfortably inside Firebase's free Spark tier with no card.
+**Sign in → Connect Firebase…** sets up automatic syncing of your books,
+shelves, reading positions, highlights, ink and notes across devices — no Sync
+button, changes just appear. Connect on a second device and the library arrives
+on its own: covers fill in as each book comes across, and opening one puts you
+on the page you reached elsewhere.
 
-Because the files stay put, a device that connects for the first time shows
-every book it has just learned about with a dashed cover and an **Add file**
-badge: the book is on the right shelf, with its progress and notes, but its
-file isn't here yet. Tap one and pick the file — any filename will do, the
-choice is taken as definitive — and it opens straight at the page you reached
-on the other device. Importing the files the usual way works just as well:
-they're matched by filename, then by title, and merged into the waiting entry
-rather than added a second time.
+The book files travel through Firestore rather than Cloud Storage, which is
+what keeps this free. Storage would need a billed plan; Firestore's free tier
+includes a gigabyte of documents, so each book is split into chunks of about
+half a megabyte, stored as text, and reassembled on the other side. A chunk is
+one write, so a whole library is a few thousand writes against a daily
+allowance of twenty thousand — and no card is involved at any point.
+
+Two limits follow from that gigabyte. Any single book over 45 MB is skipped,
+and the library as a whole stops at around 900 MB. Skipped books still appear
+on the right shelf with their progress and notes, drawn with a dashed cover and
+an **Add file** badge; tap one and pick the file — any filename will do, the
+choice is taken as definitive — and it opens straight at your place. Importing
+files the usual way works too: they're matched by filename, then by title, and
+merged into the waiting entry rather than added a second time. If you have a
+large library of big PDFs, connect OneDrive or Google Drive instead, which
+carry the files with far more room.
 
 Setup is in the app: create a project at console.firebase.google.com, add a
 web app and copy its `firebaseConfig`, enable Google sign-in under
