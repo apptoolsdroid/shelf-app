@@ -227,6 +227,9 @@ export async function saveLastLocation(bookId, location, progress) {
   // importing a book bumps it. Sync needs to know when the *position* last
   // moved, or a freshly imported blank copy looks newer than real reading.
   meta.positionUpdatedAt = new Date().toISOString();
+  if (location && typeof location === "object" && location.numPages) {
+    meta.numPages = location.numPages;
+  }
   if (typeof progress === "number" && isFinite(progress)) {
     meta.progress = Math.min(1, Math.max(0, progress));
   } else if (location && typeof location === "object" && location.numPages) {
@@ -385,6 +388,19 @@ export async function createCustomShelf(name) {
   return id;
 }
 
+// Renaming bumps updatedAt so the new name wins when shelves sync.
+export async function renameCustomShelf(shelfId, name) {
+  const shelves = await db.getAllShelves();
+  const rec = shelves.find((sh) => sh.id === shelfId);
+  if (!rec) return false;
+  const trimmed = String(name || "").trim();
+  if (!trimmed || trimmed === rec.name) return false;
+  rec.name = trimmed;
+  rec.updatedAt = new Date().toISOString();
+  await db.saveShelfRecord(rec);
+  return true;
+}
+
 export async function deleteCustomShelf(shelfId) {
   await db.deleteShelfRecord(shelfId);
 }
@@ -413,4 +429,23 @@ export function groupByFormat(books) {
     { label: "PDF", books: books.filter((b) => b.format === "pdf") },
   ];
   return sections.filter((s) => s.books.length > 0);
+}
+
+
+// Fills in the page count for PDFs that don't have one yet. Runs after an
+// import so covers show it straight away, and skips anything already counted.
+export async function backfillPageCounts(getCount, onProgress) {
+  const books = await db.getAllBooks();
+  const todo = books.filter((b) => b.format === "pdf" && !b.numPages);
+  let done = 0;
+  for (const meta of todo) {
+    const blob = await db.getBookFile(meta.id);
+    if (blob) {
+      const n = await getCount(blob);
+      if (n) await db.saveBookMeta({ ...meta, numPages: n });
+    }
+    done++;
+    if (onProgress) onProgress(done, todo.length);
+  }
+  return todo.length;
 }

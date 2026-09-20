@@ -411,3 +411,17 @@ export function destroy() {
   pdfDoc = null;
   if (containerEl) containerEl.innerHTML = "";
 }
+
+
+// How many pages a PDF has, without opening it in the reader. Used to show a
+// page count on the cover for books you haven't read yet.
+export async function getPageCount(blob) {
+  try {
+    const doc = await pdfjsLib.getDocument({ data: await blob.arrayBuffer() }).promise;
+    const n = doc.numPages;
+    doc.destroy();
+    return n;
+  } catch (_) {
+    return null; // a damaged or encrypted file just gets no page count
+  }
+}

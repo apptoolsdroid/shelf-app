@@ -571,8 +571,19 @@ el("localFileInput").addEventListener("change", async (e) => {
   else if (added) toast(added === 1 ? "Added to your shelf" : `Added ${added} books`);
   else if (skipped) toast(skipped === 1 ? "Already on your shelf" : `All ${skipped} already on your shelf`);
   await renderLibrary();
+  await countPages();
   e.target.value = "";
 });
+
+// Reads page counts out of newly imported PDFs, then redraws so the covers
+// show them. Deliberately after the library is already on screen — waiting for
+// this before showing anything would make importing feel slow.
+async function countPages() {
+  try {
+    const n = await shelf.backfillPageCounts(pdfReader.getPageCount);
+    if (n > 0) await renderLibrary();
+  } catch (_) { /* a missing page count is cosmetic */ }
+}
 
 // Import a whole folder as its own shelf. Where the browser supports picking a
 // directory (Android Chrome, desktop) the shelf is named after the folder. iOS
@@ -610,6 +621,7 @@ el("folderInput").addEventListener("change", async (e) => {
   browseMode = "shelf";
   await renderLibrary();
   toast(`"${shelfName}": ${added} added${skipped ? `, ${skipped} already had` : ""}`);
+  await countPages();
   e.target.value = "";
 });
 
@@ -633,6 +645,15 @@ async function renderLibrary() {
   el("racksView").classList.toggle("hidden", browseMode !== "racks");
   el("libraryView").classList.toggle("hidden", browseMode !== "shelf");
 }
+
+// Rows are computed from the width, so a rotation or split-screen change has
+// to redraw them. Debounced because resize fires continuously while dragging.
+let reflowTimer = null;
+window.addEventListener("resize", () => {
+  if (!shelfView || shelfView.classList.contains("hidden")) return;
+  clearTimeout(reflowTimer);
+  reflowTimer = setTimeout(() => renderLibrary(), 180);
+});
 
 // Spine looks are derived from the title, so a given book always gets the same
 // colour and height — the racks stay recognisable between visits instead of
@@ -740,9 +761,26 @@ function backToRacks() {
   renderLibrary();
 }
 
+const RAIL_KEY = "shelf.railCollapsed";
+
+function railCollapsed() {
+  try { return localStorage.getItem(RAIL_KEY) === "1"; } catch (_) { return false; }
+}
+
+function setRailCollapsed(on) {
+  try { localStorage.setItem(RAIL_KEY, on ? "1" : ""); } catch (_) {}
+  el("shelfRail").classList.toggle("collapsed", on);
+  const btn = el("railToggleBtn");
+  if (btn) {
+    btn.textContent = on ? "▾ Categories" : "▴ Hide";
+    btn.title = on ? "Show all categories" : "Hide the category bar";
+  }
+}
+
 function renderRail(shelves) {
   const rail = el("shelfRail");
   rail.innerHTML = "";
+  rail.classList.toggle("collapsed", railCollapsed());
 
   // Way back out to the room. First in the rail so it's always in the same
   // place, whichever category you're in.
@@ -773,6 +811,18 @@ function renderRail(shelves) {
   newTab.textContent = "+";
   newTab.addEventListener("click", () => startNewShelfInput(rail, newTab));
   rail.appendChild(newTab);
+
+  // Once you're inside a shelf the other categories are mostly in the way, so
+  // the bar folds down to just the one you're in, giving the books the room.
+  const toggle = document.createElement("button");
+  toggle.className = "rail-toggle";
+  toggle.id = "railToggleBtn";
+  toggle.addEventListener("click", (e) => {
+    e.stopPropagation();
+    setRailCollapsed(!railCollapsed());
+  });
+  rail.appendChild(toggle);
+  setRailCollapsed(railCollapsed());
 }
 
 function startNewShelfInput(rail, newTabEl, onCreated) {
@@ -803,45 +853,102 @@ function startNewShelfInput(rail, newTabEl, onCreated) {
   input.addEventListener("blur", finish);
 }
 
+// How many books fit across the shelf right now. Everything is a fixed size,
+// so this is just arithmetic on the available width — and it's recomputed on
+// resize and rotation so the bookcase always fills the space it has.
+const CARD_W = 116;
+const CARD_GAP = 16;
+
+function booksPerRow() {
+  const panel = el("shelfPanel");
+  const usable = (panel.clientWidth || 800) - 44 - 32; // panel padding + cubby padding
+  return Math.max(2, Math.floor((usable + CARD_GAP) / (CARD_W + CARD_GAP)));
+}
+
+function chunk(list, size) {
+  const rows = [];
+  for (let i = 0; i < list.length; i += size) rows.push(list.slice(i, i + size));
+  return rows;
+}
+
+// Renaming happens in place: the heading turns into a field, Enter or tapping
+// away saves, Escape puts it back. Same settled-once guard as the new-shelf
+// input, since Enter also triggers blur when the field is replaced.
+function startShelfRename(active) {
+  const title = el("shelfTitle");
+  if (!title) return;
+  const input = document.createElement("input");
+  input.className = "shelf-title-input";
+  input.value = active.name;
+  title.replaceWith(input);
+  input.focus();
+  input.select();
+
+  let settled = false;
+  const finish = async (save) => {
+    if (settled) return;
+    settled = true;
+    if (save) {
+      const changed = await shelf.renameCustomShelf(active.id, input.value);
+      if (changed) toast(`Renamed to "${input.value.trim()}"`);
+    }
+    await renderLibrary();
+  };
+  input.addEventListener("keydown", (e) => {
+    if (e.key === "Enter") finish(true);
+    if (e.key === "Escape") finish(false);
+  });
+  input.addEventListener("blur", () => finish(true));
+}
+
 function renderPanel(shelves) {
   const panel = el("shelfPanel");
   const active = shelves.find((s) => s.id === expandedShelfId);
 
   if (!active) {
     panel.innerHTML = `<div class="empty-state" id="emptyState">
-      No books yet. Sign in and tap <strong>Sync OneDrive</strong> to pull everything from your
-      OneDrive <em>Books</em> folder, or use <strong>Import file</strong> to add an EPUB/PDF from this device.
+      No books yet. Use the import buttons in the header to add EPUBs and PDFs from this device,
+      or connect a drive and tap the cloud to sync.
     </div>`;
     return;
   }
 
-  const sections = shelf.groupByFormat(active.books);
   const header = `
     <div class="shelf-panel-header">
-      <h2>${escapeHtml(active.name)}</h2>
+      <h2 id="shelfTitle">${escapeHtml(active.name)}</h2>
+      ${active.kind === "custom"
+        ? `<button class="shelf-rename-btn" id="renameShelfBtn" title="Rename this shelf" aria-label="Rename this shelf">✎</button>`
+        : ""}
       <span class="book-sub">${active.books.length} book${active.books.length === 1 ? "" : "s"}</span>
       ${active.id === "smart:duplicates" ? `<button class="btn primary" id="tidyDupesBtn">Hide duplicates</button>` : ""}
       ${active.kind === "custom" ? `<button class="shelf-delete-btn" id="deleteShelfBtn">Delete shelf</button>` : ""}
     </div>
   `;
 
-  if (sections.length === 0) {
+  if (active.books.length === 0) {
     panel.innerHTML = header + `<div class="empty-state">Nothing on this shelf yet.</div>`;
   } else {
-    panel.innerHTML = header + sections.map((sec) => `
-      <div class="shelf-section">
-        <h3>${escapeHtml(sec.label)}</h3>
+    // One board per row of books, stacked down the page — a bookcase rather
+    // than a single long shelf you scroll sideways. Books are no longer split
+    // by format: EPUB and PDF each have their own shelf in the rail already,
+    // so splitting again in here just made "All Books" look different from
+    // every other shelf for no reason.
+    const rows = chunk(active.books, booksPerRow());
+    panel.innerHTML = header + rows
+      .map((_, i) => `
         <div class="shelf-row">
-          <div class="grid" data-section="${escapeHtml(sec.label)}"></div>
+          <div class="grid" data-row="${i}"></div>
           <div class="shelf-board" aria-hidden="true"></div>
-        </div>
-      </div>
-    `).join("");
-    for (const sec of sections) {
-      const gridEl = panel.querySelector(`.grid[data-section="${CSS.escape(sec.label)}"]`);
-      for (const book of sec.books) gridEl.appendChild(renderBookCard(book));
-    }
+        </div>`)
+      .join("");
+    rows.forEach((row, i) => {
+      const gridEl = panel.querySelector(`.grid[data-row="${i}"]`);
+      for (const book of row) gridEl.appendChild(renderBookCard(book));
+    });
   }
+
+  const renameBtn = el("renameShelfBtn");
+  if (renameBtn) renameBtn.addEventListener("click", () => startShelfRename(active));
 
   const tidyBtn = el("tidyDupesBtn");
   if (tidyBtn) {
@@ -863,6 +970,18 @@ function renderPanel(shelves) {
   }
 }
 
+// Filenames make poor cover text — underscores, extensions, and far more
+// words than fit. This keeps enough to recognise the book; the full title is
+// still there as a tooltip and in the book menu.
+function coverTitle(title) {
+  const clean = String(title || "")
+    .replace(/\.(epub|pdf)$/i, "")
+    .replace(/[_]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+  return clean.length > 38 ? `${clean.slice(0, 36)}…` : clean;
+}
+
 function renderBookCard(book) {
   const card = document.createElement("div");
   card.className = "book-card";
@@ -871,12 +990,14 @@ function renderBookCard(book) {
   // caption underneath — that also lets the book sit directly on the shelf
   // board instead of floating above it.
   const pct = Math.round((book.progress || 0) * 100);
+  const pages = book.numPages ? `${book.numPages} pp` : "";
   card.innerHTML = `
     <button class="card-menu-btn" title="Book options" aria-label="Book options">⋯</button>
     <div class="book-cover" title="${escapeHtml(book.title)}">
       <span class="fmt-badge">${book.format}</span>
-      <span class="cover-title">${escapeHtml(book.title)}</span>
-      ${book.source === "onedrive" ? `<span class="cloud-badge" title="From OneDrive">☁</span>` : ""}
+      <span class="cover-title">${escapeHtml(coverTitle(book.title))}</span>
+      ${pages ? `<span class="cover-pages">${pages}</span>` : ""}
+      ${book.source === "onedrive" || book.source === "gdrive" ? `<span class="cloud-badge" title="Synced from your drive">☁</span>` : ""}
       ${pct > 0 ? `<span class="cover-progress" title="${pct}% read"><i style="width:${pct}%"></i></span>` : ""}
     </div>
   `;
