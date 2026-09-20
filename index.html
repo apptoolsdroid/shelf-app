@@ -71,6 +71,12 @@
       <div class="shelf-menu-sep"></div>
       <div class="provider-menu-label">Live sync</div>
       <button class="provider-item" id="firebaseBtn">Connect Firebase…</button>
+      <!-- Plain-language readout of what sync last did. Two devices with a
+           server in between is precisely where "it isn't working" is
+           impossible to act on without being told what the app can see. -->
+      <div class="sync-status hidden" id="syncStatus"></div>
+      <button class="provider-item hidden" id="syncNowBtn">Sync now</button>
+      <button class="provider-item" id="trackerBtn">Which books are on this device…</button>
       <div class="shelf-menu-sep"></div>
       <div class="provider-menu-label">Backup file</div>
       <button class="provider-item" id="syncFileBtn">Sync with backup file…</button>
@@ -232,6 +238,27 @@
       <div class="setup-actions">
         <button class="btn" id="folderCancel">Cancel</button>
         <button class="btn primary" id="folderCreate">Create &amp; use</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Sync tracker. One row per book saying where its file actually is, so
+       "some of them aren't downloading" becomes a list you can point at and
+       retry rather than a feeling. -->
+  <div id="trackerOverlay" class="setup-overlay hidden">
+    <div class="setup-card tracker-card">
+      <h2>Books on this device</h2>
+      <div class="tracker-summary" id="trackerSummary"></div>
+      <div class="tracker-filters" id="trackerFilters">
+        <button class="chip active" data-filter="all">All</button>
+        <button class="chip" data-filter="missing">Not here yet</button>
+        <button class="chip" data-filter="problem">Problems</button>
+      </div>
+      <div class="tracker-list" id="trackerList"></div>
+      <div class="setup-actions">
+        <button class="btn" id="trackerClose">Close</button>
+        <button class="btn" id="trackerRefresh">Check again</button>
+        <button class="btn primary" id="trackerRetry">Retry missing</button>
       </div>
     </div>
   </div>

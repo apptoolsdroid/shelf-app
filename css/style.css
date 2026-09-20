@@ -355,6 +355,57 @@ body.reading .lib-actions { display: none; }
   box-shadow: 0 1px 2px rgba(0,0,0,0.3);
 }
 .spine.awaiting-file { opacity: 0.6; border: 1px dashed rgba(255,255,255,0.45); }
+/* Waiting on the other device rather than on you — same dashed cover, but a
+   quieter badge, because there's nothing here to do. */
+.book-card.awaiting-upload .await-badge {
+  background: rgba(59, 40, 16, 0.5); color: var(--brass-light); font-weight: 600;
+}
+
+.sync-status {
+  padding: 8px 14px 10px; font-size: 11.5px; line-height: 1.7;
+  color: var(--on-wood-dim); border-bottom: 1px solid rgba(0,0,0,0.18);
+}
+.sync-status b { color: var(--on-wood); }
+.sync-status .warn { color: #f0c05a; }
+
+/* ---- Sync tracker --------------------------------------------------------
+   A plain list rather than anything clever: one line per book, a colour for
+   its state, the reason underneath when there is one, and a retry beside it.
+   The point is to be readable at a glance on a tablet held at arm's length. */
+.tracker-card { max-width: 560px; width: 100%; }
+.tracker-summary { font-size: 13px; color: var(--text-dim); margin: 2px 0 12px; }
+.tracker-summary b { color: var(--text); }
+.tracker-summary .warn { color: #a8701a; font-weight: 600; }
+
+.tracker-filters { display: flex; gap: 6px; margin-bottom: 10px; flex-wrap: wrap; }
+.tracker-filters .chip {
+  border: 1px solid var(--brass-dark); background: transparent; color: var(--text-dim);
+  border-radius: 14px; padding: 4px 12px; font-size: 12px; font-weight: 600; cursor: pointer;
+}
+.tracker-filters .chip.active { background: var(--brass-dark); color: var(--brass-light); }
+
+.tracker-list { max-height: 46vh; overflow: auto; margin-bottom: 14px; }
+.tracker-row {
+  display: flex; align-items: flex-start; gap: 10px;
+  padding: 9px 2px; border-bottom: 1px solid rgba(90, 62, 26, 0.16);
+}
+.tracker-row:last-child { border-bottom: none; }
+.tracker-dot {
+  width: 9px; height: 9px; border-radius: 50%; flex-shrink: 0; margin-top: 5px;
+}
+.tracker-dot.ok   { background: #4e8a4a; }
+.tracker-dot.wait { background: #c8a24a; }
+.tracker-dot.warn { background: #c07d2a; }
+.tracker-dot.bad  { background: #a5392f; }
+.tracker-text { flex: 1; min-width: 0; }
+.tracker-title {
+  font-weight: 600; font-size: 13.5px; color: var(--text);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.tracker-state { font-size: 11.5px; color: var(--text-dim); margin-top: 1px; }
+.tracker-error { font-size: 11.5px; color: #a5392f; margin-top: 2px; }
+.tracker-retry { padding: 4px 10px; font-size: 12px; flex-shrink: 0; }
+.tracker-empty { font-size: 13px; color: var(--text-dim); padding: 14px 2px; }
 
 /* How far through the book you are — the app already remembered your place,
    this just makes it visible without opening the book. */

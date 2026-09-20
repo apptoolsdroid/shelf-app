@@ -58,6 +58,9 @@ async function refreshSignInUI() {
 }
 
 function toggleProviderMenu(show) {
+  // Refreshed as the menu opens rather than only after a sync, so the readout
+  // is never a stale snapshot from whenever the app happened to start.
+  if (show) renderSyncStatus();
   el("providerMenu").classList.toggle("hidden", !show);
 }
 
@@ -501,6 +504,7 @@ function describeSync(r) {
   if (r.tooLarge && r.tooLarge.length) {
     line += ` · ${r.tooLarge.length} too large to sync, add ${r.tooLarge.length === 1 ? "it" : "them"} by hand`;
   }
+  if (r.fileError) line += ` · books couldn't transfer: ${r.fileError}`;
   return line;
 }
 
@@ -525,7 +529,159 @@ function refreshFirebaseUI() {
   el("firebaseBtn").textContent = acc
     ? `Live sync: ${acc.username} · turn off`
     : (live.isConfigured() ? "Turn on live sync" : "Connect Firebase…");
+  el("syncNowBtn").classList.toggle("hidden", !acc);
+  renderSyncStatus();
 }
+
+// Says, in words, what the app can actually see: how many books are here, how
+// many are stored for the other device to collect, when that last happened and
+// what went wrong if anything did.
+function renderSyncStatus() {
+  const box = el("syncStatus");
+  const st = live.getStatus();
+  if (!st.signedIn || !st.last) {
+    box.classList.add("hidden");
+    return;
+  }
+  const r = st.last;
+  const when = st.lastRunAt ? new Date(st.lastRunAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) : "—";
+  const mb = (n) => `${(n / (1024 * 1024)).toFixed(n > 10 * 1024 * 1024 ? 0 : 1)} MB`;
+  const lines = [
+    `<b>${r.booksHere ?? 0}</b> book${r.booksHere === 1 ? "" : "s"} on this device`,
+    `<b>${r.filesStored ?? 0}</b> stored for your other devices${r.bytesStored ? ` · ${mb(r.bytesStored)} of 900 MB` : ""}`,
+    `Last sync ${when} — ${r.filesPulled || 0} in, ${r.filesPushed || 0} out`,
+  ];
+  if (r.tooLarge && r.tooLarge.length) {
+    lines.push(`<span class="warn">${r.tooLarge.length} too large to send: ${escapeHtml(r.tooLarge.slice(0, 3).join(", "))}</span>`);
+  }
+  if (r.fileError) {
+    lines.push(`<span class="warn">Couldn't transfer books: ${escapeHtml(r.fileError)}</span>`);
+  }
+  if (!r.filesStored && !r.booksHere) {
+    lines.push(`<span class="warn">Nothing stored yet — open Shelf on the device that has your books so it can send them.</span>`);
+  }
+  box.innerHTML = lines.join("<br>");
+  box.classList.remove("hidden");
+}
+
+// ---- Sync tracker -----------------------------------------------------------
+
+// Each state gets a plain-English line and a colour, because "pending" and
+// "resource-exhausted" tell you nothing about what to do next.
+const FILE_STATES = {
+  local:    { dot: "ok",   label: "On this device" },
+  waiting:  { dot: "wait", label: "Waiting — the other device hasn't sent it yet" },
+  pending:  { dot: "wait", label: "Not checked yet" },
+  failed:   { dot: "bad",  label: "Download failed" },
+  missing:  { dot: "bad",  label: "File missing on this device" },
+  toolarge: { dot: "warn", label: "Too large to sync — add it by hand" },
+  nospace:  { dot: "warn", label: "No room left in cloud storage" },
+};
+
+let trackerFilter = "all";
+
+// Books range from a 40 KB text EPUB to a 40 MB scanned PDF, and rounding the
+// small ones to "0.0 MB" makes the list look broken.
+function fileSize(bytes) {
+  if (bytes >= 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+  if (bytes >= 1024) return `${Math.round(bytes / 1024)} KB`;
+  return `${bytes} B`;
+}
+
+function trackerMatches(row) {
+  if (trackerFilter === "missing") return row.state !== "local";
+  if (trackerFilter === "problem") return ["failed", "missing", "toolarge", "nospace"].includes(row.state);
+  return true;
+}
+
+async function renderTracker() {
+  const rows = await live.getLibraryState();
+  const here = rows.filter((r) => r.state === "local").length;
+  const problems = rows.filter((r) => ["failed", "missing", "toolarge", "nospace"].includes(r.state)).length;
+  const waitingOn = rows.filter((r) => r.state === "waiting" || r.state === "pending").length;
+
+  el("trackerSummary").innerHTML =
+    `<b>${here}</b> of <b>${rows.length}</b> books are on this device` +
+    (waitingOn ? ` · ${waitingOn} still coming` : "") +
+    (problems ? ` · <span class="warn">${problems} need attention</span>` : "");
+
+  const shown = rows.filter(trackerMatches);
+  const list = el("trackerList");
+  if (!shown.length) {
+    list.innerHTML = `<p class="tracker-empty">Nothing here — every book is accounted for.</p>`;
+    return;
+  }
+  list.innerHTML = shown.map((r) => {
+    const st = FILE_STATES[r.state] || FILE_STATES.pending;
+    const size = r.bytes ? ` · ${fileSize(r.bytes)}` : "";
+    const retryable = ["failed", "missing", "waiting", "pending"].includes(r.state);
+    return `
+      <div class="tracker-row">
+        <span class="tracker-dot ${st.dot}"></span>
+        <div class="tracker-text">
+          <div class="tracker-title">${escapeHtml(r.title)}</div>
+          <div class="tracker-state">${escapeHtml(st.label)}${size}</div>
+          ${r.error ? `<div class="tracker-error">${escapeHtml(r.error)}</div>` : ""}
+        </div>
+        ${retryable ? `<button class="btn tracker-retry" data-book-id="${escapeHtml(r.id)}">Retry</button>` : ""}
+      </div>`;
+  }).join("");
+
+  list.querySelectorAll(".tracker-retry").forEach((btn) => {
+    btn.addEventListener("click", async () => {
+      btn.disabled = true;
+      btn.textContent = "…";
+      await live.retryBooks([btn.dataset.bookId]).catch((err) => toast(err.message));
+      await renderTracker();
+      await renderLibrary();
+    });
+  });
+}
+
+function openTracker() {
+  toggleProviderMenu(false);
+  el("trackerOverlay").classList.remove("hidden");
+  renderTracker();
+}
+
+el("trackerBtn").addEventListener("click", (e) => { e.stopPropagation(); openTracker(); });
+el("trackerClose").addEventListener("click", () => el("trackerOverlay").classList.add("hidden"));
+
+el("trackerFilters").addEventListener("click", (e) => {
+  const chip = e.target.closest(".chip");
+  if (!chip) return;
+  trackerFilter = chip.dataset.filter;
+  el("trackerFilters").querySelectorAll(".chip").forEach((c) => c.classList.toggle("active", c === chip));
+  renderTracker();
+});
+
+el("trackerRefresh").addEventListener("click", async () => {
+  toast("Checking…");
+  await live.syncNow(syncProgress).catch((err) => toast(err.message));
+  await renderTracker();
+  await renderLibrary();
+});
+
+el("trackerRetry").addEventListener("click", async () => {
+  toast("Retrying the books that aren't here…");
+  const r = await live.retryBooks().catch((err) => { toast(err.message); return null; });
+  await renderTracker();
+  await renderLibrary();
+  if (r && r.ok) toast(describeSync(r));
+});
+
+el("syncNowBtn").addEventListener("click", async (e) => {
+  e.stopPropagation();
+  try {
+    toast("Syncing…");
+    const r = await live.syncNow(syncProgress);
+    await renderLibrary();
+    toast(describeSync(r));
+  } catch (err) {
+    toast(`Sync failed: ${err.message}`);
+  }
+  refreshFirebaseUI();
+});
 
 el("firebaseBtn").addEventListener("click", async (e) => {
   e.stopPropagation();
@@ -1053,14 +1209,25 @@ function renderBookCard(book) {
   const pct = Math.round((book.progress || 0) * 100);
   const pages = book.numPages ? `${book.numPages} pp` : "";
   const waiting = shelf.isPlaceholder(book);
+  // Two different situations, two different messages. "Waiting" means the
+  // other device simply hasn't uploaded it yet and there is nothing to do but
+  // open the app over there; "Add file" means it genuinely needs a hand.
+  const upstreamPending = waiting && book.awaitingUpload;
   card.classList.toggle("awaiting-file", waiting);
+  card.classList.toggle("awaiting-upload", !!upstreamPending);
   card.innerHTML = `
     <button class="card-menu-btn" title="Book options" aria-label="Book options">⋯</button>
-    <div class="book-cover" title="${escapeHtml(waiting ? `${book.title} — tap to add the file from this device` : book.title)}">
+    <div class="book-cover" title="${escapeHtml(
+      upstreamPending ? `${book.title} — waiting for the device that has this book to come online. Tap to add it from here instead.`
+      : waiting ? `${book.title} — tap to add the file from this device`
+      : book.title)}">
       <span class="fmt-badge">${book.format}</span>
       <span class="cover-title">${escapeHtml(coverTitle(book.title))}</span>
       ${pages ? `<span class="cover-pages">${pages}</span>` : ""}
-      ${waiting ? `<span class="await-badge" title="Synced from your other device — the file isn't here yet">Add file</span>` : ""}
+      ${waiting ? `<span class="await-badge" title="${upstreamPending
+          ? "Your other device hasn't sent this one across yet"
+          : "Synced from your other device — the file isn't here yet"}">${
+          upstreamPending ? "Waiting" : "Add file"}</span>` : ""}
       ${!waiting && (book.source === "onedrive" || book.source === "gdrive") ? `<span class="cloud-badge" title="Synced from your drive">☁</span>` : ""}
       ${pct > 0 ? `<span class="cover-progress" title="${pct}% read"><i style="width:${pct}%"></i></span>` : ""}
     </div>

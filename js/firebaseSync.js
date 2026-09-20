@@ -145,7 +145,19 @@ const ms = (v) => (v ? Date.parse(v) || 0 : 0);
 // same book's annotations within seconds of each other is not a real scenario
 // here, and a simple rule you can reason about beats a clever one you can't.
 
-export async function syncNow(onProgress = null) {
+// Only one sync may be in flight at a time. Startup, the Sync now button and
+// an incoming change from another device can all fire at once, and two runs
+// overlapping means both try to fill the same waiting book — one of them loses,
+// and the book it was carrying quietly stays empty.
+let activeRun = null;
+
+export function syncNow(onProgress = null) {
+  if (activeRun) return activeRun;
+  activeRun = runSync(onProgress).finally(() => { activeRun = null; });
+  return activeRun;
+}
+
+async function runSync(onProgress) {
   if (!user) return { ok: false, reason: "not-signed-in" };
   const s = await loadSdk();
   const uid = user.uid;
@@ -298,7 +310,9 @@ export async function syncNow(onProgress = null) {
 
   const fileResult = await syncFiles(s, uid, onProgress);
 
-  return { ok: true, pulled, pushed, ...fileResult };
+  lastResult = { ok: true, pulled, pushed, ...fileResult };
+  lastRunAt = new Date().toISOString();
+  return lastResult;
 }
 
 // ---- The book files themselves ----------------------------------------------
@@ -306,16 +320,46 @@ export async function syncNow(onProgress = null) {
 // the (much slower) file transfer fills the covers in behind them.
 
 async function syncFiles(s, uid, onProgress) {
-  const index = await files.listRemoteFiles(s, store, uid);
+  let index;
+  try {
+    index = await files.listRemoteFiles(s, store, uid);
+  } catch (err) {
+    // Almost always the security rules refusing the files collection. Saying
+    // so beats leaving a shelf of dashed covers with no explanation.
+    return { filesPulled: 0, filesPushed: 0, tooLarge: [], fileError: err.message };
+  }
+
   let filesPulled = 0;
   let filesPushed = 0;
   const tooLarge = [];
+  let fileError = null;
 
   const books = await db.getAllBooks();
+
+  // Every book's outcome is written back onto its record, so the tracker can
+  // say what happened to each one instead of the app quietly giving up on a
+  // few and leaving you to notice. An earlier version skipped a book whose
+  // chunks were incomplete with a bare `continue` — no note, no retry, no
+  // trace. That is exactly the shape of "some of them aren't downloading".
+  const mark = async (meta, state, extra = {}) => {
+    const next = { ...meta, fileState: state, fileCheckedAt: new Date().toISOString(), ...extra };
+    if (state !== "failed") delete next.fileError;
+    await db.saveBookMeta(next);
+  };
 
   // Down first: a book waiting on this device is what the reader is actually
   // looking at, so it matters more than backing up one they already have.
   const waiting = books.filter((b) => b.placeholder && index.has(docId(bookKey(b))));
+
+  // Waiting books with nothing stored for them yet aren't broken — the device
+  // that has them simply hasn't been opened since.
+  for (const meta of books) {
+    if (!meta.placeholder) continue;
+    if (!index.has(docId(bookKey(meta)))) {
+      await mark(meta, "waiting", { awaitingUpload: true });
+    }
+  }
+
   let n = 0;
   for (const meta of waiting) {
     const id = docId(bookKey(meta));
@@ -324,28 +368,60 @@ async function syncFiles(s, uid, onProgress) {
     if (onProgress) onProgress({ phase: "download", index: n, total: waiting.length, title: meta.title });
     try {
       const blob = await files.pullFile(s, store, uid, id, info);
-      if (!blob) continue; // incomplete upload; leave it importable by hand
-      await adoptFileIntoPlaceholder(meta.id, new File([blob], info.name || `${meta.title}.${info.format || meta.format}`));
+      if (!blob) {
+        await mark(meta, "failed", {
+          awaitingUpload: false,
+          remoteSize: info.size,
+          fileError: "Only part of this book was uploaded — it will be sent again from the other device",
+        });
+        fileError = fileError || "a book was only partly uploaded";
+        continue;
+      }
+      await adoptFileIntoPlaceholder(
+        meta.id,
+        new File([blob], info.name || `${meta.title}.${info.format || meta.format}`)
+      );
+      const filled = await db.getBookMeta(meta.id);
+      await mark(filled || meta, "local", { awaitingUpload: false, remoteSize: info.size });
       filesPulled++;
-    } catch (_) { /* one unreadable book shouldn't stop the rest */ }
+    } catch (err) {
+      await mark(meta, "failed", { awaitingUpload: false, remoteSize: info.size, fileError: err.message });
+      fileError = fileError || err.message;
+    }
   }
 
   // Up second, smallest first, so a library with one enormous PDF in it still
   // gets most of its books across quickly.
   let budget = files.LIBRARY_BUDGET_BYTES - files.totalStoredBytes(index);
-  const mine = books.filter((b) => !b.placeholder && !index.has(docId(bookKey(b))));
+  const mine = books.filter((b) => !b.placeholder);
   const sized = [];
   for (const meta of mine) {
     const blob = await db.getBookFile(meta.id);
-    if (blob) sized.push({ meta, blob });
+    if (!blob) {
+      // A book of ours whose bytes have gone missing — worth showing rather
+      // than pretending it's fine, since it won't open either.
+      await mark(meta, "missing", { fileError: "The file for this book isn't on this device" });
+      continue;
+    }
+    if (index.has(docId(bookKey(meta)))) {
+      await mark(meta, "local", { bookBytes: blob.size, storedRemotely: true });
+      continue;
+    }
+    sized.push({ meta, blob });
   }
   sized.sort((a, b) => a.blob.size - b.blob.size);
 
   n = 0;
   for (const { meta, blob } of sized) {
     n++;
-    if (blob.size > files.MAX_BOOK_BYTES || blob.size > budget) {
+    if (blob.size > files.MAX_BOOK_BYTES) {
       tooLarge.push(meta.title);
+      await mark(meta, "toolarge", { bookBytes: blob.size, storedRemotely: false });
+      continue;
+    }
+    if (blob.size > budget) {
+      tooLarge.push(meta.title);
+      await mark(meta, "nospace", { bookBytes: blob.size, storedRemotely: false });
       continue;
     }
     if (onProgress) onProgress({ phase: "upload", index: n, total: sized.length, title: meta.title });
@@ -356,10 +432,90 @@ async function syncFiles(s, uid, onProgress) {
       });
       budget -= blob.size;
       filesPushed++;
-    } catch (_) { /* out of quota or offline — try again next sync */ }
+      await mark(meta, "local", { bookBytes: blob.size, storedRemotely: true });
+    } catch (err) {
+      await mark(meta, "local", { bookBytes: blob.size, storedRemotely: false, uploadError: err.message });
+      fileError = fileError || err.message;
+    }
   }
 
-  return { filesPulled, filesPushed, tooLarge };
+  return {
+    filesPulled, filesPushed, tooLarge, fileError,
+    booksHere: books.filter((b) => !b.placeholder).length,
+    filesStored: index.size,
+    bytesStored: files.totalStoredBytes(index),
+  };
+}
+
+// ---- What the app can tell you about its own syncing ------------------------
+// Two devices and an invisible server between them is exactly the situation
+// where "it doesn't work" is impossible to act on. This is the readout.
+
+let lastResult = null;
+let lastRunAt = null;
+
+// One row per book, describing where its file actually is. This is what the
+// tracker draws, and it's deliberately computed from the stored record rather
+// than from a live query, so it reads instantly and still says something
+// useful when the app is offline.
+export async function getLibraryState() {
+  const books = await db.getAllBooks();
+  return books.map((b) => {
+    let state = b.fileState;
+    if (!state) state = b.placeholder ? (b.awaitingUpload ? "waiting" : "pending") : "local";
+    return {
+      id: b.id,
+      title: b.title,
+      format: b.format,
+      state,
+      error: b.fileError || b.uploadError || null,
+      bytes: b.bookBytes || b.remoteSize || 0,
+      storedRemotely: !!b.storedRemotely,
+      checkedAt: b.fileCheckedAt || null,
+      progress: b.progress || 0,
+    };
+  }).sort((a, b) => {
+    const rank = { failed: 0, missing: 1, toolarge: 2, nospace: 3, waiting: 4, pending: 5, local: 6 };
+    const d = (rank[a.state] ?? 9) - (rank[b.state] ?? 9);
+    return d !== 0 ? d : String(a.title).localeCompare(String(b.title));
+  });
+}
+
+// Re-attempt one book, or every book that isn't already here. Clearing the
+// stored failure first means a book that has since been uploaded properly is
+// tried again rather than being written off for good.
+export async function retryBooks(bookIds = null) {
+  if (!user) return { ok: false, reason: "not-signed-in" };
+  const books = await db.getAllBooks();
+  const targets = books.filter((b) => bookIds
+    ? bookIds.includes(b.id)
+    // Everything that isn't already here, not just the outright failures — a
+    // book still marked "waiting" may well have been uploaded since.
+    : b.fileState !== "local" && b.fileState !== "toolarge");
+  for (const b of targets) {
+    const next = { ...b };
+    delete next.fileState;
+    delete next.fileError;
+    delete next.uploadError;
+    // A book whose bytes are gone goes back to being a waiting entry, so the
+    // download path picks it up again on the next run.
+    if (!(await db.getBookFile(b.id))) {
+      next.placeholder = true;
+      next.syncKey = next.syncKey || bookKey(b);
+    }
+    await db.saveBookMeta(next);
+  }
+  return syncNow();
+}
+
+export function getStatus() {
+  return {
+    configured: isConfigured(),
+    signedIn: !!user,
+    account: user ? (user.email || user.displayName || "signed in") : null,
+    lastRunAt,
+    last: lastResult,
+  };
 }
 
 // ---- Live updates -----------------------------------------------------------
