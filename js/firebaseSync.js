@@ -14,7 +14,7 @@
 // local database id, because the same book has a different id on each device.
 // ============================================================================
 import * as db from "./db.js";
-import { bookKey } from "./bookshelf.js";
+import { bookKey, savePlaceholder } from "./bookshelf.js";
 
 const CONFIG_KEY = "shelf.firebaseConfig";
 const SDK_VERSION_KEY = "shelf.firebaseSdkVersion";
@@ -123,6 +123,20 @@ function docId(key) {
   return encodeURIComponent(key).replace(/%2F/gi, "_") || "unknown";
 }
 
+// Best effort at recovering a key from a document id, for records written
+// before the key was stored as a field of its own. Keys are lowercase
+// "f:<filename>" or "t:<title>:<format>", neither of which normally contains a
+// slash, so this is exact in practice — and anything it can't decode is simply
+// skipped rather than guessed at.
+function safeDecodeId(id) {
+  try {
+    const decoded = decodeURIComponent(String(id));
+    return /^[ft]:/.test(decoded) ? decoded : null;
+  } catch (_) {
+    return null;
+  }
+}
+
 const ms = (v) => (v ? Date.parse(v) || 0 : 0);
 
 // ---- The sync itself --------------------------------------------------------
@@ -172,6 +186,10 @@ export async function syncNow() {
       // A book with no position is still worth recording the first time it's
       // seen, but it must never overwrite a real position from another device.
       await s.setDoc(s.doc(store, `users/${uid}/books/${id}`), {
+        // The key is stored alongside the data as well as being the document
+        // id. The id has to be squeezed into what Firestore allows, which is
+        // not reversible for every key; this field always reads back exactly.
+        key,
         title: local.title || "",
         format: local.format || "",
         lastLocation: local.lastLocation ?? null,
@@ -182,6 +200,29 @@ export async function syncNow() {
       });
       pushed++;
     }
+  }
+
+  // Books this device has never seen. Without this step the loop above only
+  // ever visits books that already exist locally, so a second device pulled
+  // the shelves down and then had nothing to put on them — every shelf arrived
+  // empty, which reads as a broken sync. The file can't travel (that needs a
+  // paid plan), but the book itself, its progress and its notes can, and the
+  // record left here is what the file attaches to when it's imported.
+  for (const [id, remote] of remoteByKey) {
+    const key = remote.key || safeDecodeId(id);
+    if (!key || byKey.has(key)) continue;
+    const placeholder = await savePlaceholder({
+      key,
+      title: remote.title,
+      format: remote.format,
+      lastLocation: remote.lastLocation,
+      progress: remote.progress,
+      hidden: remote.hidden,
+      positionUpdatedAt: remote.positionUpdatedAt,
+      updatedAt: remote.updatedAt,
+    });
+    byKey.set(key, placeholder);
+    pulled++;
   }
 
   // --- Annotations -----------------------------------------------------------
@@ -214,9 +255,13 @@ export async function syncNow() {
   }
 
   // --- Shelves ---------------------------------------------------------------
-  const idToKey = new Map(books.map((b) => [b.id, bookKey(b)]));
+  // Built from the post-pull view of the library, placeholders included —
+  // otherwise a shelf that arrives referring to books this device only just
+  // learned about would map every one of them to nothing and come out empty.
+  const allBooks = await db.getAllBooks();
+  const idToKey = new Map(allBooks.map((b) => [b.id, bookKey(b)]));
   const keyToId = new Map();
-  for (const b of books) if (!keyToId.has(bookKey(b))) keyToId.set(bookKey(b), b.id);
+  for (const b of allBooks) if (!keyToId.has(bookKey(b))) keyToId.set(bookKey(b), b.id);
 
   const localShelves = await db.getAllShelves();
   const localById = new Map(localShelves.map((sh) => [sh.id, sh]));

@@ -336,6 +336,26 @@ body.reading .lib-actions { display: none; }
   position: absolute; bottom: 6px; right: 8px; font-size: 12px;
   color: rgba(59,40,16,0.75); z-index: 2;
 }
+/* Books that came across from another device. Sync carries your place, your
+   shelves and your notes, but not the book files themselves, so these sit on
+   the shelf looking like a book waiting to be filled in — clearly present and
+   clearly not ready, rather than silently missing. Tapping one asks for the
+   file and then opens it where you left off. */
+.book-card.awaiting-file .book-cover {
+  opacity: 0.72;
+  background-image: repeating-linear-gradient(
+    135deg, transparent 0 9px, rgba(59, 40, 16, 0.07) 9px 18px);
+  border-style: dashed;
+}
+.book-cover .await-badge {
+  position: absolute; bottom: 7px; right: 7px; z-index: 2;
+  font-size: 9.5px; font-weight: 700; letter-spacing: 0.02em;
+  padding: 2px 6px; border-radius: 9px;
+  background: var(--brass-dark); color: var(--brass-light);
+  box-shadow: 0 1px 2px rgba(0,0,0,0.3);
+}
+.spine.awaiting-file { opacity: 0.6; border: 1px dashed rgba(255,255,255,0.45); }
+
 /* How far through the book you are — the app already remembered your place,
    this just makes it visible without opening the book. */
 .book-cover .cover-progress {

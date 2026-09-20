@@ -559,15 +559,44 @@ async function syncNow() {
 
 el("syncBtn").addEventListener("click", syncNow);
 
+// Set when someone taps a book that synced across but has no file here yet.
+// The next file they pick is taken as that book, whatever it's called.
+let awaitingFileFor = null;
+
 el("localFileInput").addEventListener("change", async (e) => {
+  const files = [...e.target.files];
+
+  if (awaitingFileFor && files.length === 1) {
+    const target = awaitingFileFor;
+    awaitingFileFor = null;
+    try {
+      const filled = await shelf.adoptFileIntoPlaceholder(target.id, files[0]);
+      toast(`"${filled.title}" is ready — opening where you left off`);
+      await renderLibrary();
+      await countPages();
+      e.target.value = "";
+      await openBook(filled, null);
+    } catch (err) {
+      toast(err.message);
+      e.target.value = "";
+    }
+    return;
+  }
+  awaitingFileFor = null;
+
   let added = 0;
   let skipped = 0;
-  for (const file of e.target.files) {
+  let filled = 0;
+  for (const file of files) {
     const result = await shelf.importLocalFile(file);
     if (result.duplicate) skipped++;
+    else if (result.filledPlaceholder) { added++; filled++; }
     else added++;
   }
-  if (added && skipped) toast(`Added ${added}, skipped ${skipped} already on your shelf`);
+  if (filled) toast(filled === 1
+    ? "Matched to a book from your other device — your place is intact"
+    : `Matched ${filled} books from your other device`);
+  else if (added && skipped) toast(`Added ${added}, skipped ${skipped} already on your shelf`);
   else if (added) toast(added === 1 ? "Added to your shelf" : `Added ${added} books`);
   else if (skipped) toast(skipped === 1 ? "Already on your shelf" : `All ${skipped} already on your shelf`);
   await renderLibrary();
@@ -714,10 +743,13 @@ function renderRacks(shelves) {
     const boards = rows.map((row) => {
       // Each spine is its own button: pulling a single book off the shelf
       // should open that book, not the category it happens to sit in.
-      const spines = row.map((bk) =>
-        `<button class="spine" style="${spineStyle(bk)}" data-book-id="${escapeHtml(bk.id)}"
-           title="${escapeHtml(bk.title)}" aria-label="Open ${escapeHtml(bk.title)}"><i>${escapeHtml(spineLabel(bk.title))}</i></button>`
-      ).join("");
+      const spines = row.map((bk) => {
+        const waiting = shelf.isPlaceholder(bk);
+        const hint = waiting ? `${bk.title} — tap to add the file` : bk.title;
+        return `<button class="spine${waiting ? " awaiting-file" : ""}" style="${spineStyle(bk)}"
+           data-book-id="${escapeHtml(bk.id)}"
+           title="${escapeHtml(hint)}" aria-label="Open ${escapeHtml(bk.title)}"><i>${escapeHtml(spineLabel(bk.title))}</i></button>`;
+      }).join("");
       return `
         <div class="rack-shelf">
           <div class="rack-books">${spines}</div>
@@ -991,13 +1023,16 @@ function renderBookCard(book) {
   // board instead of floating above it.
   const pct = Math.round((book.progress || 0) * 100);
   const pages = book.numPages ? `${book.numPages} pp` : "";
+  const waiting = shelf.isPlaceholder(book);
+  card.classList.toggle("awaiting-file", waiting);
   card.innerHTML = `
     <button class="card-menu-btn" title="Book options" aria-label="Book options">⋯</button>
-    <div class="book-cover" title="${escapeHtml(book.title)}">
+    <div class="book-cover" title="${escapeHtml(waiting ? `${book.title} — tap to add the file from this device` : book.title)}">
       <span class="fmt-badge">${book.format}</span>
       <span class="cover-title">${escapeHtml(coverTitle(book.title))}</span>
       ${pages ? `<span class="cover-pages">${pages}</span>` : ""}
-      ${book.source === "onedrive" || book.source === "gdrive" ? `<span class="cloud-badge" title="Synced from your drive">☁</span>` : ""}
+      ${waiting ? `<span class="await-badge" title="Synced from your other device — the file isn't here yet">Add file</span>` : ""}
+      ${!waiting && (book.source === "onedrive" || book.source === "gdrive") ? `<span class="cloud-badge" title="Synced from your drive">☁</span>` : ""}
       ${pct > 0 ? `<span class="cover-progress" title="${pct}% read"><i style="width:${pct}%"></i></span>` : ""}
     </div>
   `;
@@ -1137,6 +1172,18 @@ function showReaderShell(meta) {
 
 async function openBook(meta, coverEl) {
   closeShelfMenu();
+
+  // A book that synced across from another device has everything except the
+  // file. Rather than opening the reader and failing there, ask for the file —
+  // whichever one is chosen is taken as this book, so it doesn't matter if it's
+  // saved under a different name here.
+  if (shelf.isPlaceholder(meta)) {
+    awaitingFileFor = meta;
+    toast(`Choose the file for "${meta.title}"`);
+    el("localFileInput").click();
+    return;
+  }
+
   const morph = el("readerMorphSurface");
 
   if (document.startViewTransition && coverEl) {

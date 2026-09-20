@@ -108,9 +108,22 @@ const LAYOUT_FILE = "shelf-library.json";
 // membership therefore can't travel as ids — it travels as this stable key,
 // derived from the file's name in the drive, which both devices agree on.
 export function bookKey(meta) {
+  // A placeholder created by sync carries the key it arrived under, so that
+  // when the real file is later imported on this device the two line up
+  // exactly and merge instead of appearing twice.
+  if (meta.syncKey) return meta.syncKey;
   const name = meta.cloudPushedAs || meta.oneDriveFileName;
   if (name) return `f:${String(name).toLowerCase()}`;
   return `t:${String(meta.title || "").toLowerCase()}:${meta.format}`;
+}
+
+// A book known to exist — its title, your place in it, its shelf, its
+// annotations — but whose file isn't on this device. Sync carries reading
+// state, not book files (those need a paid Firebase plan), so without these a
+// second device showed the shelves correctly and then nothing on them, which
+// looks like the sync is broken rather than like a file waiting to be added.
+export function isPlaceholder(meta) {
+  return !!(meta && meta.placeholder);
 }
 
 export async function syncShelfLayout() {
@@ -174,7 +187,28 @@ function stripExt(name) {
 export async function importLocalFile(file) {
   const id = idForLocalFile(file.name, file.size);
   const existing = await db.getBookMeta(id);
-  if (existing) return { meta: existing, duplicate: true };
+  if (existing && !existing.placeholder) return { meta: existing, duplicate: true };
+
+  // Does this file complete a book that sync already told us about? If so it
+  // takes over that record rather than becoming a second copy — which keeps
+  // the reading position, annotations and shelf membership that arrived from
+  // the other device, since all of those hang off the placeholder's id.
+  const waiting = await findPlaceholderFor(file);
+  if (waiting) {
+    await db.saveBookFile(waiting.id, file);
+    const filled = {
+      ...waiting,
+      placeholder: false,
+      source: "local",
+      cachedLocally: true,
+      title: waiting.title || stripExt(file.name),
+      format: waiting.format || guessFormat(file.name),
+      updatedAt: new Date().toISOString(),
+    };
+    delete filled.placeholder;
+    await db.saveBookMeta(filled);
+    return { meta: filled, duplicate: false, filledPlaceholder: true };
+  }
 
   await db.saveBookFile(id, file);
   const meta = {
@@ -192,6 +226,67 @@ export async function importLocalFile(file) {
   };
   await db.saveBookMeta(meta);
   return { meta, duplicate: false };
+}
+
+// Matches a file being imported against the books sync knows about but has no
+// file for. The filename is tried first because that's how books pushed to a
+// drive are keyed; title-and-format catches books that were only ever local,
+// where the filename on the two devices may well differ.
+async function findPlaceholderFor(file) {
+  const books = await db.getAllBooks();
+  const pending = books.filter((b) => b.placeholder);
+  if (!pending.length) return null;
+  const byName = `f:${String(file.name).toLowerCase()}`;
+  const byTitle = `t:${stripExt(file.name).toLowerCase()}:${guessFormat(file.name)}`;
+  return pending.find((b) => bookKey(b) === byName)
+      || pending.find((b) => bookKey(b) === byTitle)
+      || null;
+}
+
+// Records a book that another device has, so it appears on the shelf here with
+// its progress intact and can be completed by importing the file.
+export async function savePlaceholder({ key, title, format, lastLocation, progress, hidden, positionUpdatedAt, updatedAt }) {
+  const id = `sync_${key.replace(/[^a-z0-9]+/gi, "_").slice(0, 60)}`;
+  const existing = await db.getBookMeta(id);
+  if (existing && !existing.placeholder) return existing; // the file turned up in the meantime
+  const meta = {
+    id,
+    syncKey: key,
+    placeholder: true,
+    source: "sync",
+    title: title || "Untitled",
+    author: "",
+    format: format || "epub",
+    cachedLocally: false,
+    lastLocation: lastLocation ?? null,
+    progress: progress ?? 0,
+    hidden: !!hidden,
+    positionUpdatedAt: positionUpdatedAt || null,
+    updatedAt: updatedAt || new Date().toISOString(),
+  };
+  await db.saveBookMeta(meta);
+  return meta;
+}
+
+// Attaches a file the reader picked to a specific waiting book, regardless of
+// what it's called. Matching by name is a good guess but only a guess — the
+// same book is often saved under a different filename on each device — so when
+// someone taps a waiting book and chooses a file, that choice is taken as
+// definitive.
+export async function adoptFileIntoPlaceholder(placeholderId, file) {
+  const waiting = await db.getBookMeta(placeholderId);
+  if (!waiting) throw new Error("That book is no longer on your shelf");
+  await db.saveBookFile(waiting.id, file);
+  const filled = {
+    ...waiting,
+    source: "local",
+    cachedLocally: true,
+    format: guessFormat(file.name) || waiting.format,
+    updatedAt: new Date().toISOString(),
+  };
+  delete filled.placeholder;
+  await db.saveBookMeta(filled);
+  return filled;
 }
 
 export async function getShelf({ includeHidden = false } = {}) {
@@ -212,6 +307,12 @@ export async function ensureBookBytes(meta) {
     await db.saveBookFile(meta.id, blob);
     await db.saveBookMeta({ ...meta, cachedLocally: true });
     return blob;
+  }
+  if (meta.placeholder) {
+    throw new Error(
+      "This book is on your other device. Sync carries your place and your notes, " +
+      "but not the file itself — import it here once and everything lines up."
+    );
   }
   throw new Error("Book file is missing and has no cloud copy to re-download from.");
 }

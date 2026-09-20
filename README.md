@@ -203,6 +203,15 @@ changes just appear. Book files are deliberately excluded: they'd need Cloud
 Storage, which now requires a billed plan, whereas everything else is small
 text that sits comfortably inside Firebase's free Spark tier with no card.
 
+Because the files stay put, a device that connects for the first time shows
+every book it has just learned about with a dashed cover and an **Add file**
+badge: the book is on the right shelf, with its progress and notes, but its
+file isn't here yet. Tap one and pick the file — any filename will do, the
+choice is taken as definitive — and it opens straight at the page you reached
+on the other device. Importing the files the usual way works just as well:
+they're matched by filename, then by title, and merged into the waiting entry
+rather than added a second time.
+
 Setup is in the app: create a project at console.firebase.google.com, add a
 web app and copy its `firebaseConfig`, enable Google sign-in under
 Authentication, create a Firestore database, and add your site's address under
