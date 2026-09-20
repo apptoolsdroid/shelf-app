@@ -69,6 +69,9 @@
       <!-- Works with or without a cloud connection: a plain file you can move
            between devices yourself. -->
       <div class="shelf-menu-sep"></div>
+      <div class="provider-menu-label">Live sync</div>
+      <button class="provider-item" id="firebaseBtn">Connect Firebase…</button>
+      <div class="shelf-menu-sep"></div>
       <div class="provider-menu-label">Backup file</div>
       <button class="provider-item" id="syncFileBtn">Sync with backup file…</button>
       <button class="provider-item" id="exportBtn">Create a new backup…</button>
@@ -200,6 +203,11 @@
         <span id="setupInputLabel">Client ID</span>
         <input type="text" id="setupClientId" placeholder="Paste the client ID here"
                autocapitalize="off" autocorrect="off" spellcheck="false" />
+      </label>
+      <label class="setup-field hidden" id="setupBlobField">
+        <span>Paste the whole firebaseConfig block</span>
+        <textarea id="setupBlob" rows="7" placeholder='{ "apiKey": "...", "authDomain": "...", "projectId": "...", "appId": "..." }'
+                  autocapitalize="off" autocorrect="off" spellcheck="false"></textarea>
       </label>
 
       <p class="setup-note" id="setupNote"></p>

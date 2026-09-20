@@ -107,7 +107,7 @@ const LAYOUT_FILE = "shelf-library.json";
 // imported it and `gd_…`/`od_…` on a device that got it from the drive. Shelf
 // membership therefore can't travel as ids — it travels as this stable key,
 // derived from the file's name in the drive, which both devices agree on.
-function bookKey(meta) {
+export function bookKey(meta) {
   const name = meta.cloudPushedAs || meta.oneDriveFileName;
   if (name) return `f:${String(name).toLowerCase()}`;
   return `t:${String(meta.title || "").toLowerCase()}:${meta.format}`;
@@ -223,6 +223,10 @@ export async function saveLastLocation(bookId, location, progress) {
   const meta = await db.getBookMeta(bookId);
   if (!meta) return;
   meta.lastLocation = location;
+  // Tracked separately from updatedAt, which changes for any reason at all —
+  // importing a book bumps it. Sync needs to know when the *position* last
+  // moved, or a freshly imported blank copy looks newer than real reading.
+  meta.positionUpdatedAt = new Date().toISOString();
   if (typeof progress === "number" && isFinite(progress)) {
     meta.progress = Math.min(1, Math.max(0, progress));
   } else if (location && typeof location === "object" && location.numPages) {

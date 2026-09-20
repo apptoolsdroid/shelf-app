@@ -630,3 +630,10 @@ body.inking .textLayer { user-select: none; }
 .folder-row.current { color: var(--brass); font-weight: 600; }
 .folder-row .folder-mark { width: 14px; flex-shrink: 0; }
 .folder-empty { padding: 12px; font-size: 13px; color: var(--text-dim); }
+
+.setup-field textarea {
+  width: 100%; padding: 9px 10px; border-radius: 8px; font-size: 12px;
+  border: 1px solid var(--border); background: var(--bg); color: var(--text);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace; resize: vertical;
+}
+.setup-field.hidden { display: none; }

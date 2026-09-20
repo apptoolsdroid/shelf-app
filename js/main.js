@@ -14,6 +14,7 @@ import * as pdfReader from "./readerPdf.js";
 import * as notes from "./notes.js";
 import * as backup from "./backup.js";
 import * as db from "./db.js";
+import * as live from "./firebaseSync.js";
 
 const el = (id) => document.getElementById(id);
 const shelfView = el("shelfView");
@@ -329,6 +330,27 @@ const SETUP_COPY = {
           "this app never sees them. Once connected it creates a Books folder in your Drive and " +
           "syncs to it, while still keeping every book on this device for offline reading.",
   },
+  firebase: {
+    title: "Connect Firebase live sync",
+    storageKey: "shelf.firebaseConfig",
+    inputLabel: "",
+    blob: true,
+    intro: "Firebase keeps your reading positions, shelves, highlights and notes " +
+           "in step across devices automatically — no Sync button. Book files stay " +
+           "on each device, so this sits comfortably inside Google's free tier and " +
+           "needs no payment details.",
+    steps: [
+      'Open <a href="https://console.firebase.google.com" target="_blank" rel="noopener">console.firebase.google.com</a> and create a project (Analytics can be off).',
+      'Click the <strong>&lt;/&gt;</strong> web icon to add a web app, and copy the <code>firebaseConfig</code> block it shows you.',
+      'In <strong>Build → Authentication</strong>, click Get started and enable <strong>Google</strong> as a sign-in provider.',
+      'In <strong>Build → Firestore Database</strong>, click Create database and choose production mode.',
+      'In <strong>Authentication → Settings → Authorised domains</strong>, add the address below.',
+      'Paste the config block into the box underneath.',
+    ],
+    note: "Stay on the free Spark plan. Only reading positions, shelves and annotations are " +
+          "stored — all small text — so the free allowance is far more than a personal library " +
+          "will ever use, and no card is required.",
+  },
   onedrive: {
     title: "Connect Microsoft OneDrive",
     storageKey: "shelf.msClientId",
@@ -368,6 +390,14 @@ function openSetup(name) {
   el("setupIntro").textContent = copy.intro;
   el("setupSteps").innerHTML = copy.steps.map((s) => `<li>${s}</li>`).join("");
   el("setupInputLabel").textContent = copy.inputLabel;
+  const wantsBlob = !!copy.blob;
+  el("setupBlobField").classList.toggle("hidden", !wantsBlob);
+  el("setupClientId").parentElement.classList.toggle("hidden", wantsBlob);
+  if (wantsBlob) {
+    let existingBlob = "";
+    try { existingBlob = localStorage.getItem(copy.storageKey) || ""; } catch (_) {}
+    el("setupBlob").value = existingBlob ? JSON.stringify(JSON.parse(existingBlob), null, 2) : "";
+  }
   el("setupNote").textContent = copy.note;
   // The exact origin to register. Getting this wrong is the single most common
   // reason sign-in fails, so it's shown rather than described.
@@ -391,16 +421,93 @@ el("setupOrigin").addEventListener("click", (e) => e.target.select());
 
 el("setupSave").addEventListener("click", async () => {
   const name = setupProvider;
+  const copy = SETUP_COPY[name];
+
+  if (copy.blob) {
+    // Accept the config exactly as Firebase prints it, whether that's bare
+    // JSON or the "const firebaseConfig = {...};" line from the console.
+    const raw = el("setupBlob").value.trim();
+    if (!raw) { toast("Paste the firebaseConfig block first"); return; }
+    let parsed;
+    try {
+      const braces = raw.slice(raw.indexOf("{"), raw.lastIndexOf("}") + 1);
+      // Quote bare keys and swap single quotes so a copy-pasted JS object parses.
+      const jsonish = braces
+        .replace(/([{,]\s*)([A-Za-z0-9_]+)\s*:/g, '$1"$2":')
+        .replace(/'/g, '"')
+        .replace(/,(\s*[}\]])/g, "$1");
+      parsed = JSON.parse(jsonish);
+    } catch (_) {
+      toast("That doesn't look like a firebaseConfig block");
+      return;
+    }
+    if (!parsed.apiKey || !parsed.projectId || !parsed.appId) {
+      toast("That config is missing apiKey, projectId or appId");
+      return;
+    }
+    try {
+      live.saveConfig(parsed);
+    } catch (_) {
+      toast("This browser won't let the app save settings");
+      return;
+    }
+    closeSetup();
+    await connectFirebase();
+    return;
+  }
+
   const value = el("setupClientId").value.trim();
   if (!value) { toast("Paste the client ID first"); return; }
   try {
-    localStorage.setItem(SETUP_COPY[name].storageKey, value);
+    localStorage.setItem(copy.storageKey, value);
   } catch (_) {
     toast("This browser won't let the app save settings");
     return;
   }
   closeSetup();
   await connectProvider(name);
+});
+
+// ---- Firebase live sync -----------------------------------------------------
+
+function afterRemoteChange() {
+  renderLibrary();
+  toast("Updated from your other device");
+}
+
+async function connectFirebase() {
+  if (!live.isConfigured()) { openSetup("firebase"); return; }
+  try {
+    toast("Connecting to Firebase…");
+    await live.init();
+    if (!live.isSignedIn()) await live.signIn();
+    const result = await live.syncNow();
+    await renderLibrary();
+    live.startLive(afterRemoteChange);
+    toast(`Live sync on — ${result.pulled} in, ${result.pushed} out`);
+  } catch (err) {
+    toast(err.message);
+  }
+  refreshFirebaseUI();
+}
+
+function refreshFirebaseUI() {
+  const acc = live.getAccount();
+  el("firebaseBtn").textContent = acc
+    ? `Live sync: ${acc.username} · turn off`
+    : (live.isConfigured() ? "Turn on live sync" : "Connect Firebase…");
+}
+
+el("firebaseBtn").addEventListener("click", async (e) => {
+  e.stopPropagation();
+  toggleProviderMenu(false);
+  if (live.isSignedIn()) {
+    await live.signOutFirebase();
+    toast("Live sync off");
+    refreshFirebaseUI();
+    return;
+  }
+  await connectFirebase();
 });
 
 async function connectProvider(name) {
@@ -1267,4 +1374,20 @@ el("versionChip").addEventListener("click", async () => {
   }
   await refreshSignInUI();
   await renderLibrary();
+
+  // Reconnect live sync silently if it was on. Never blocks startup: if
+  // Firebase is unreachable the app just carries on locally.
+  try {
+    if (live.isConfigured()) {
+      await live.init();
+      if (live.isSignedIn()) {
+        await live.syncNow();
+        await renderLibrary();
+        live.startLive(afterRemoteChange);
+      }
+    }
+  } catch (err) {
+    console.warn("Live sync unavailable:", err.message);
+  }
+  refreshFirebaseUI();
 })();

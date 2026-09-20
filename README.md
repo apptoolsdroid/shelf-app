@@ -195,6 +195,35 @@ third-party URL that can disappear or change. Steps 1 (Azure) is genuinely
 optional: skip it and everything except OneDrive sync still works — import,
 read, underline, bookmark, categorise, and offline access.
 
+## Live sync of reading positions (Firebase, free)
+
+**Sign in → Connect Firebase…** sets up automatic syncing of your reading
+positions, shelves, highlights, ink and notes across devices — no Sync button,
+changes just appear. Book files are deliberately excluded: they'd need Cloud
+Storage, which now requires a billed plan, whereas everything else is small
+text that sits comfortably inside Firebase's free Spark tier with no card.
+
+Setup is in the app: create a project at console.firebase.google.com, add a
+web app and copy its `firebaseConfig`, enable Google sign-in under
+Authentication, create a Firestore database, and add your site's address under
+Authentication → Settings → Authorised domains. Paste the config block in and
+you're done.
+
+Lock the database down so only you can read your own data — in Firestore
+Rules, use:
+
+    rules_version = '2';
+    service cloud.firestore {
+      match /databases/{database}/documents {
+        match /users/{uid}/{document=**} {
+          allow read, write: if request.auth != null && request.auth.uid == uid;
+        }
+      }
+    }
+
+Get books onto each device by importing them or via the backup file below;
+after that, your place in them keeps itself in step.
+
 ## Moving your library without connecting a drive
 
 If you'd rather not register the app with Google or Microsoft at all, the
