@@ -404,14 +404,32 @@ body.reading .lib-actions { display: none; }
 .reader-toolbar .btn { background: rgba(0,0,0,0.25); color: var(--on-wood); }
 .reader-toolbar .btn.primary { background: var(--accent); color: var(--accent-text); }
 .reader-toolbar .spacer { flex: 1; }
-.reader-toolbar #pageInfo { color: var(--on-wood-dim); font-weight: 600; }
+/* Fixed width on purpose. This label goes from empty to "Page 12 of 340" the
+   moment the first page renders, and on a narrow tablet that extra width is
+   enough to wrap the toolbar onto another line — which shortens the page area
+   and forces the book to be laid out a second time, seen as a flash just as
+   the book appears. Reserving the space keeps the toolbar's height fixed. */
+.reader-toolbar #pageInfo {
+  color: var(--on-wood-dim); font-weight: 600;
+  min-width: 118px; text-align: center; white-space: nowrap;
+}
 
+/* Deliberately `hidden`, not `auto`. Both readers paginate their own content
+   to fit, so this box should never need to scroll — and if it ever did, the
+   scrollbar appearing would change its width, which re-flows the book, which
+   can remove the scrollbar again. That loop is seen as the page blinking
+   without end. `scrollbar-gutter: stable` does the same job for the PDF
+   scroller below, which legitimately does scroll when you zoom in. */
 #readerContainer {
-  flex: 1; overflow: auto; background: var(--reader-bg); display: flex;
+  flex: 1; overflow: hidden; background: var(--reader-bg); display: flex;
   align-items: flex-start; justify-content: center;
 }
 #epubContainer, #pdfContainer { width: 100%; height: 100%; }
-#pdfContainer { overflow: auto; display: flex; justify-content: center; padding: 20px; }
+#pdfContainer {
+  overflow: auto; display: flex; justify-content: center; padding: 20px;
+  scrollbar-gutter: stable both-edges;
+  overscroll-behavior: contain;
+}
 
 .shelf-underline { text-decoration: underline; text-decoration-color: var(--brass); text-decoration-thickness: 3px; }
 

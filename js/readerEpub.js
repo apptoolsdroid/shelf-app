@@ -5,6 +5,7 @@
 // ============================================================================
 import * as annotations from "./annotations.js";
 import { attachSwipe } from "./gestures.js";
+import { watchSize } from "./reflow.js";
 
 let book = null;
 let rendition = null;
@@ -13,14 +14,6 @@ let containerEl = null;
 let resizeObserver = null;
 let lastCfi = null;
 let onTapCenter = null;
-
-function debounce(fn, ms) {
-  let t;
-  return (...args) => {
-    clearTimeout(t);
-    t = setTimeout(() => fn(...args), ms);
-  };
-}
 
 // Roughly how far through the book we are, as a 0–1 fraction, for the progress
 // bar on the cover. epub.js can give an exact percentage, but only after
@@ -96,20 +89,24 @@ export async function openEpub({ container, blob, savedLocation, onLocation, onT
   // Screen-size adjustment: re-flow columns/pagination whenever the reader's
   // available space changes (rotation, split-screen on iPad, window resize),
   // then jump back to exactly where the reader was.
-  // Only re-flow when the space actually changed. Re-displaying the chapter
-  // for a resize notification that changed nothing makes the text flash.
-  let flowedFor = { w: 0, h: 0 };
-  resizeObserver = new ResizeObserver(
-    debounce(() => {
+  //
+  // Crucially this watches the fixed page area, not the element epub.js
+  // renders into. epub.js sizes that element itself as part of laying the
+  // chapter out, so watching it means our re-flow triggers a resize which
+  // triggers our re-flow — a loop that shows up as the text flashing endlessly
+  // while the book is open. See reflow.js.
+  const stage = container.closest(".reader-stage") || container.parentElement || container;
+  resizeObserver = watchSize(
+    stage,
+    () => {
       const w = containerEl.clientWidth;
       const h = containerEl.clientHeight;
-      if (Math.abs(w - flowedFor.w) < 4 && Math.abs(h - flowedFor.h) < 4) return;
-      flowedFor = { w, h };
+      if (!w || !h) return;
       rendition.resize(w, h);
       if (lastCfi) rendition.display(lastCfi);
-    }, 200)
+    },
+    { delay: 200 }
   );
-  resizeObserver.observe(container);
 
   rendition.on("selected", async (cfiRange, contents) => {
     const text = book.getRange(cfiRange).toString();

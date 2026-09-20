@@ -10,6 +10,7 @@
 import * as annotations from "./annotations.js";
 import { attachSwipe } from "./gestures.js";
 import { attachInk, renderStrokes } from "./ink.js";
+import { watchSize } from "./reflow.js";
 
 // pdf.js v4 ships as an ES module only — loading it with a plain <script> tag
 // silently leaves pdfjsLib undefined and every PDF fails to open. Import it
@@ -79,39 +80,40 @@ export async function openPdf({ container, blob, savedState, onState }) {
   await render();
 }
 
-// Remembers the size the current pages were built for. iOS in particular
-// fires resize notifications that don't actually change anything, and
-// re-rendering for those is what made the page blink while a book loaded.
-let renderedForSize = { w: 0, h: 0 };
+// Re-lay-out when the *page area* changes size — never when the scroller the
+// pages live in does. Measuring the scroller and then rendering into it means
+// a scrollbar appearing can change the measurement, which re-renders, which
+// can remove the scrollbar, which re-renders... that loop is what made the
+// page blink continuously. The stage is sized by the window and the toolbar
+// alone, so nothing this module draws can feed back into it.
+function stageEl() {
+  return containerEl.closest(".reader-stage") || containerEl.parentElement || containerEl;
+}
 
 function attachResizeHandling() {
   if (resizeObserver) resizeObserver.disconnect();
-  renderedForSize = { w: 0, h: 0 };
-  resizeObserver = new ResizeObserver(
-    debounce(() => {
-      const w = containerEl.clientWidth;
-      const h = containerEl.clientHeight;
-      // A couple of pixels of drift is noise, not a rotation.
-      if (Math.abs(w - renderedForSize.w) < 4 && Math.abs(h - renderedForSize.h) < 4) return;
-      render();
-    }, 150)
-  );
-  resizeObserver.observe(containerEl);
-}
-
-function debounce(fn, ms) {
-  let t;
-  return (...args) => {
-    clearTimeout(t);
-    t = setTimeout(() => fn(...args), ms);
-  };
+  resizeObserver = watchSize(stageEl(), () => render());
 }
 
 // ---- Fit-to-screen scale calculation ---------------------------------------
 
+// The space actually available to a page: the scroller's box minus its own
+// padding, minus a gutter reserved for a scrollbar. Leaving the padding out of
+// this (as an earlier version did) makes every page render fractionally larger
+// than the space it has to sit in, so a scrollbar is always needed — which on
+// a tablet is both an unwanted scroll and, with the observer above, a redraw.
+function availableBox() {
+  const cs = getComputedStyle(containerEl);
+  const padX = parseFloat(cs.paddingLeft) + parseFloat(cs.paddingRight);
+  const padY = parseFloat(cs.paddingTop) + parseFloat(cs.paddingBottom);
+  return {
+    w: Math.max(80, containerEl.clientWidth - padX - 2),
+    h: Math.max(80, containerEl.clientHeight - padY - 2),
+  };
+}
+
 function computeFitScale(pagesAcross) {
-  const availW = containerEl.clientWidth - 24; // small margin
-  const availH = containerEl.clientHeight - 24;
+  const { w: availW, h: availH } = availableBox();
   const gap = pagesAcross === 2 ? 12 : 0;
   const byWidth = (availW - gap) / (pagesAcross * baseViewport1x.width);
   const byHeight = availH / baseViewport1x.height;
@@ -292,7 +294,13 @@ let renderToken = 0;
 
 async function render() {
   if (!pdfDoc) return;
-  renderedForSize = { w: containerEl.clientWidth, h: containerEl.clientHeight };
+  // Tell the guard what size this render is for, so a notification reporting
+  // that same size isn't mistaken for a change worth redrawing.
+  if (resizeObserver) resizeObserver.seed();
+  // Decide whether this mode scrolls *before* measuring, so the fit is
+  // calculated against the box the page will actually land in rather than one
+  // that still has a scrollbar gutter reserved in it.
+  containerEl.style.overflow = viewMode === "scroll" || zoomFactor > 1 ? "auto" : "hidden";
   if (viewMode === "scroll") await renderScrollView();
   else await renderPagedView();
   notifyState();
@@ -320,6 +328,15 @@ async function renderPagedView() {
 
   if (myToken !== renderToken) return;
   containerEl.style.alignItems = "center";
+  // (overflow for this mode was already set in render(), before measuring.)
+  // Single page and spread are laid out to fit the screen, so at normal zoom
+  // there is nothing to scroll to and the scroller is switched off outright.
+  // This is the mode that blinked: a fitted page sits right on the threshold
+  // where a scrollbar appears, and a scrollbar appearing narrows the box the
+  // page was fitted to, so it gets refitted, so the scrollbar goes away, so it
+  // gets refitted again — forever. Continuous scroll never did this because
+  // its content always overflows, so its scrollbar never flickers. Zoomed in
+  // past the fit, panning is the whole point, so scrolling comes back.
   containerEl.replaceChildren(stage);
 }
 
