@@ -258,24 +258,27 @@ body.reading .lib-actions { display: none; }
     radial-gradient(ellipse 900px 500px at 20% 0%, rgba(0,0,0,0.10), transparent 60%),
     var(--bg);
 }
-.shelf-panel-header { display: flex; align-items: baseline; gap: 10px; margin-bottom: 12px; }
-
-/* ---- Find, sort and file ---------------------------------------------------
-   A strip under the shelf name. It wraps on a narrow tablet rather than
-   squeezing, because the search box losing width is what makes a search box
-   useless. */
-.shelf-tools {
-  display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-bottom: 16px;
+/* ---- Shelf header: name, count, find, sort and file, all on one line -------
+   Centre-aligned rather than baseline-aligned, since the row now holds
+   controls as well as text. It wraps only when there is genuinely no room,
+   because a search box that has lost its width is a search box you can't
+   read what you typed into. */
+.shelf-panel-header {
+  display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+  margin-bottom: 14px; row-gap: 8px;
 }
+.shelf-panel-header h2 { flex-shrink: 0; }
+.shelf-panel-header .book-sub { flex-shrink: 0; white-space: nowrap; }
+
 .shelf-search {
   position: relative; display: flex; align-items: center;
-  flex: 1 1 200px; min-width: 170px; max-width: 360px;
+  flex: 1 1 180px; min-width: 150px; max-width: 340px; margin-left: 4px;
 }
 .shelf-search .search-icon {
   position: absolute; left: 10px; font-size: 15px; color: var(--text-dim); pointer-events: none;
 }
 .shelf-search input {
-  width: 100%; padding: 8px 30px 8px 28px; font-size: 13.5px;
+  width: 100%; padding: 7px 28px 7px 26px; font-size: 13px;
   border-radius: 8px; border: 1px solid var(--border);
   background: var(--bg-elevated); color: var(--text);
   -webkit-appearance: none; appearance: none;
@@ -287,7 +290,8 @@ body.reading .lib-actions { display: none; }
   position: absolute; right: 6px; border: none; background: none; cursor: pointer;
   color: var(--text-dim); font-size: 18px; line-height: 1; padding: 2px 6px;
 }
-.shelf-sort { flex-shrink: 0; max-width: 170px; }
+.shelf-sort { flex-shrink: 0; max-width: 150px; font-size: 12.5px; padding: 7px 20px 7px 9px; }
+.shelf-select-btn { flex-shrink: 0; font-size: 12.5px; padding: 7px 11px; }
 .shelf-select-btn.on { background: var(--accent); color: var(--accent-text); font-weight: 600; }
 
 .shelf-selection {

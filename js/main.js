@@ -1281,6 +1281,11 @@ function renderPanel(shelves) {
     .map((m) => `<option value="${m.id}"${m.id === panelSort ? " selected" : ""}>${escapeHtml(m.label)}</option>`)
     .join("");
 
+  // Name, count, search, sort and Select all on one line. They were stacked,
+  // which cost a whole row of vertical space above every shelf for no reason —
+  // on a tablet in landscape that's most of a row of books. The search box
+  // takes whatever width is left over and the row only wraps when there is
+  // genuinely no room.
   const header = `
     <div class="shelf-panel-header">
       <h2 id="shelfTitle">${escapeHtml(active.name)}</h2>
@@ -1290,10 +1295,6 @@ function renderPanel(shelves) {
       <span class="book-sub">${filtering
         ? `${visible.length} of ${active.books.length}`
         : `${active.books.length} book${active.books.length === 1 ? "" : "s"}`}</span>
-      ${active.id === "smart:duplicates" ? `<button class="btn primary" id="tidyDupesBtn">Hide duplicates</button>` : ""}
-      ${active.kind === "custom" ? `<button class="shelf-delete-btn" id="deleteShelfBtn">Delete shelf</button>` : ""}
-    </div>
-    <div class="shelf-tools">
       <div class="shelf-search">
         <span class="search-icon" aria-hidden="true">⌕</span>
         <input type="search" id="shelfSearch" placeholder="Find a book…"
@@ -1305,6 +1306,8 @@ function renderPanel(shelves) {
       <button class="btn shelf-select-btn${selectMode ? " on" : ""}" id="shelfSelectBtn">
         ${selectMode ? "Done" : "Select"}
       </button>
+      ${active.id === "smart:duplicates" ? `<button class="btn primary" id="tidyDupesBtn">Hide duplicates</button>` : ""}
+      ${active.kind === "custom" ? `<button class="shelf-delete-btn" id="deleteShelfBtn">Delete shelf</button>` : ""}
     </div>
     ${selectMode ? `
       <div class="shelf-selection">
