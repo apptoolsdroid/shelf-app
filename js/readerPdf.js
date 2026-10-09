@@ -11,6 +11,7 @@ import * as annotations from "./annotations.js";
 import { attachSwipe } from "./gestures.js";
 import { attachInk, renderStrokes } from "./ink.js";
 import { watchSize } from "./reflow.js";
+import { samplePdfColor } from "./pageTurn.js";
 
 // pdf.js v4 ships as an ES module only — loading it with a plain <script> tag
 // silently leaves pdfjsLib undefined and every PDF fails to open. Import it
@@ -31,6 +32,7 @@ let onStateChange = null;
 let resizeObserver = null;
 let scrollObserver = null;
 let detachSwipe = null;
+let onTurn = null;
 
 // Ink mode: while it's on, the page is a drawing surface instead of something
 // you select text on or swipe to turn.
@@ -55,9 +57,10 @@ function refreshInkLayers() {
 }
 const renderedScrollPages = new Set();
 
-export async function openPdf({ container, blob, savedState, onState }) {
+export async function openPdf({ container, blob, savedState, onState, onTurn: turn }) {
   containerEl = container;
   onStateChange = onState;
+  onTurn = turn;
   const arrayBuffer = await blob.arrayBuffer();
   pdfDoc = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
 
@@ -198,6 +201,10 @@ async function buildPageEl(pageNum, scale) {
     // page is rendered at full device resolution rather than resampled.
     transform: dpr !== 1 ? [dpr, 0, 0, dpr, 0, 0] : null,
   }).promise;
+
+  // Tell the page-turn animation what this book's paper actually looks like,
+  // so the turning leaf is the same colour as the page it came from.
+  if (pageNum === currentPage) samplePdfColor(canvas);
 
   const textContent = await page.getTextContent();
   pdfjsLib.renderTextLayer({ textContentSource: textContent, container: textLayerDiv, viewport, textDivs: [] });
@@ -405,19 +412,23 @@ export async function bookmarkCurrentPage(label) {
 export function nextPage() {
   if (viewMode === "scroll") return;
   const step = viewMode === "double" ? getSpreadPages(currentPage).length || 2 : 1;
-  currentPage = Math.min(currentPage + Math.max(step, 1), pdfDoc.numPages);
+  const target = Math.min(currentPage + Math.max(step, 1), pdfDoc.numPages);
+  // Nothing moved — we're on the last page. Animating a turn that didn't
+  // happen is worse than not animating at all.
+  if (target === currentPage) return;
+  currentPage = target;
+  if (onTurn) onTurn(1);
   return render();
 }
 
 export function prevPage() {
   if (viewMode === "scroll") return;
-  if (viewMode === "double") {
-    const pages = getSpreadPages(currentPage);
-    const prevAnchor = Math.max(1, pages[0] - 1);
-    currentPage = prevAnchor;
-  } else {
-    currentPage = Math.max(1, currentPage - 1);
-  }
+  const target = viewMode === "double"
+    ? Math.max(1, getSpreadPages(currentPage)[0] - 1)
+    : Math.max(1, currentPage - 1);
+  if (target === currentPage) return; // already at the front of the book
+  currentPage = target;
+  if (onTurn) onTurn(-1);
   return render();
 }
 
@@ -449,6 +460,7 @@ export function getPageInfo() {
 }
 
 export function destroy() {
+  onTurn = null;
   if (resizeObserver) resizeObserver.disconnect();
   if (scrollObserver) scrollObserver.disconnect();
   pdfDoc = null;

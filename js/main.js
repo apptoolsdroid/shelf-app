@@ -12,6 +12,8 @@ import * as annotations from "./annotations.js";
 import * as epubReader from "./readerEpub.js";
 import * as pdfReader from "./readerPdf.js";
 import * as notes from "./notes.js";
+import * as pageTurn from "./pageTurn.js";
+import * as keys from "./shortcuts.js";
 import * as backup from "./backup.js";
 import * as db from "./db.js";
 import * as live from "./firebaseSync.js";
@@ -1306,6 +1308,8 @@ function renderPanel(shelves) {
       <button class="btn shelf-select-btn${selectMode ? " on" : ""}" id="shelfSelectBtn">
         ${selectMode ? "Done" : "Select"}
       </button>
+      <button class="btn shelf-keys-btn" id="shelfKeysBtn"
+              title="Keyboard shortcuts (?)" aria-label="Keyboard shortcuts">⌨</button>
       ${active.id === "smart:duplicates" ? `<button class="btn primary" id="tidyDupesBtn">Hide duplicates</button>` : ""}
       ${active.kind === "custom" ? `<button class="shelf-delete-btn" id="deleteShelfBtn">Delete shelf</button>` : ""}
     </div>
@@ -1408,6 +1412,9 @@ function wirePanelTools(active, visible) {
     saveSortMode(sortSel.value);
     await renderLibrary();
   });
+
+  const keysBtn = el("shelfKeysBtn");
+  if (keysBtn) keysBtn.addEventListener("click", () => toggleShortcutSheet(true));
 
   const selBtn = el("shelfSelectBtn");
   if (selBtn) selBtn.addEventListener("click", async () => {
@@ -1723,6 +1730,7 @@ async function loadBookContent(meta) {
         savedLocation: meta.lastLocation,
         onLocation: (cfi, progress) => shelf.saveLastLocation(meta.id, cfi, progress),
         onTapCenter: () => toggleImmersive(),
+        onTurn: animateTurn,
       });
     } else {
       const saved = meta.lastLocation || {};
@@ -1735,6 +1743,7 @@ async function loadBookContent(meta) {
           shelf.saveLastLocation(meta.id, state);
           updatePageInfo(state);
         },
+        onTurn: animateTurn,
       });
     }
     if (currentFormat === "epub") el("fontFamilySelect").value = epubReader.getFontFamily();
@@ -1829,22 +1838,32 @@ el("pdfContainer") && el("pdfContainer").addEventListener("click", (e) => {
   if (pdfReader.getViewMode() === "scroll") { toggleImmersive(); return; }
   const rect = el("pdfContainer").getBoundingClientRect();
   const x = e.clientX - rect.left;
-  if (x < rect.width * 0.25) pdfReader.prevPage();
-  else if (x > rect.width * 0.75) pdfReader.nextPage();
+  if (x < rect.width * 0.25) turnPage(-1);
+  else if (x > rect.width * 0.75) turnPage(1);
   else toggleImmersive();
 });
 
-el("prevArrowBtn").addEventListener("click", () => pdfReader.prevPage());
-el("nextArrowBtn").addEventListener("click", () => pdfReader.nextPage());
+el("prevArrowBtn").addEventListener("click", () => turnPage(-1));
+el("nextArrowBtn").addEventListener("click", () => turnPage(1));
 
 // ---- Page turning: on-screen edge arrows, and keyboard arrows ---------------
 
+// Every way of turning a page — the edge arrows, the toolbar arrows, a swipe,
+// a tap at the edge of the text, the keyboard — comes through here, so the
+// animation can't be attached to one route and missing from the others.
+// The animation is fired by the readers themselves rather than from here,
+// because a swipe inside an EPUB chapter happens in that chapter's own
+// iframe and never passes through this function at all.
 function turnPage(dir) {
   if (currentFormat === "epub") {
     dir > 0 ? epubReader.nextPage() : epubReader.prevPage();
   } else if (currentFormat === "pdf" && pdfReader.getViewMode() !== "scroll") {
     dir > 0 ? pdfReader.nextPage() : pdfReader.prevPage();
   }
+}
+
+function animateTurn(dir) {
+  pageTurn.playTurn(el("readerStage"), dir);
 }
 
 el("pageArrowPrev").addEventListener("click", (e) => { e.stopPropagation(); turnPage(-1); });
@@ -1860,11 +1879,147 @@ function updatePageArrows() {
   el("pageArrowNext").hidden = !show;
 }
 
+// ---- Keyboard shortcuts -----------------------------------------------------
+// One handler for the whole app. It splits on where you are, because the same
+// key should do the obvious thing in a book and the obvious thing on a shelf,
+// and it stands aside entirely while you're typing.
+
+function readerShortcut(e) {
+  const mod = keys.hasMod(e);
+
+  if (e.key === "ArrowLeft") { turnPage(-1); e.preventDefault(); return; }
+  if (e.key === "ArrowRight") { turnPage(1); e.preventDefault(); return; }
+  if (e.key === " " || e.key === "Spacebar") { turnPage(e.shiftKey ? -1 : 1); e.preventDefault(); return; }
+
+  if (mod && (e.key === "u" || e.key === "U")) { el("undoBtn").click(); e.preventDefault(); return; }
+  if (mod && (e.key === "z" || e.key === "Z")) {
+    el(e.shiftKey ? "redoBtn" : "undoBtn").click();
+    e.preventDefault();
+    return;
+  }
+  if (mod && (e.key === "y" || e.key === "Y")) { el("redoBtn").click(); e.preventDefault(); return; }
+  if (mod && (e.key === "s" || e.key === "S")) { el("saveBtn").click(); e.preventDefault(); return; }
+  if (mod) return; // leave every other browser shortcut alone
+
+  switch (e.key.toLowerCase()) {
+    // Escape undoes the most recent thing you turned on, one layer at a
+    // time, and only closes the book once there's nothing left to back out
+    // of. Closing the book straight out of pen mode — which it used to do —
+    // is a long way from what Escape is meant to mean.
+    case "escape":
+      if (el("notesView").classList.contains("active")) closeNotes();
+      else if (pdfReader.isInking()) { pdfReader.setInkTool(false); refreshInkButtons(); updatePageArrows(); }
+      else if (document.body.classList.contains("immersive")) setImmersive(false);
+      else closeBook();
+      break;
+    case "b": el("bookmarkBtn").click(); break;
+    case "n": el("notesBtn").click(); break;
+    case "f": toggleImmersive(); break;
+    case "p": el("penBtn").click(); break;
+    case "h": el("hiliteBtn").click(); break;
+    case "e": el("eraserBtn").click(); break;
+    case "1": case "2": case "3": {
+      if (currentFormat !== "pdf") return;
+      const modes = { 1: "single", 2: "double", 3: "scroll" };
+      const sel = el("pdfViewModeSelect");
+      sel.value = modes[e.key];
+      sel.dispatchEvent(new Event("change"));
+      break;
+    }
+    case "+": case "=": if (currentFormat === "pdf") el("zoomInBtn").click(); break;
+    case "-": case "_": if (currentFormat === "pdf") el("zoomOutBtn").click(); break;
+    case "0": if (currentFormat === "pdf") el("zoomFitBtn").click(); break;
+    default: return;
+  }
+  e.preventDefault();
+}
+
+function libraryShortcut(e) {
+  const mod = keys.hasMod(e);
+
+  if (mod && (e.key === "f" || e.key === "F")) { focusSearch(); e.preventDefault(); return; }
+  if (mod && (e.key === "a" || e.key === "A") && selectMode) {
+    const btn = el("selAllBtn");
+    if (btn) { btn.click(); e.preventDefault(); }
+    return;
+  }
+  if (mod) return;
+
+  switch (e.key) {
+    case "/": focusSearch(); break;
+    case "Escape":
+      if (!el("trackerOverlay").classList.contains("hidden")) {
+        el("trackerOverlay").classList.add("hidden");
+      } else if (panelQuery || selectMode) {
+        resetPanelTools();
+        renderLibrary();
+      }
+      break;
+    case "s": case "S": {
+      const btn = el("shelfSelectBtn");
+      if (btn) btn.click();
+      break;
+    }
+    case "g": case "G":
+      browseMode = "racks";
+      expandedShelfId = null;
+      resetPanelTools();
+      renderLibrary();
+      break;
+    case "y": case "Y": openTracker(); break;
+    default: return;
+  }
+  e.preventDefault();
+}
+
+function focusSearch() {
+  const box = el("shelfSearch");
+  if (!box) { toast("Open a shelf first to search it"); return; }
+  box.focus();
+  box.select();
+}
+
 document.addEventListener("keydown", (e) => {
-  if (!readerView.classList.contains("active")) return;
-  if (e.key === "ArrowLeft") { turnPage(-1); e.preventDefault(); }
-  if (e.key === "ArrowRight") { turnPage(1); e.preventDefault(); }
-  if (e.key === "Escape" && document.body.classList.contains("immersive")) setImmersive(false);
+  if (keys.isTyping(e)) return;
+
+  // "?" works everywhere, including with a dialog open — it's the way out of
+  // not knowing what any of the other keys do.
+  if (e.key === "?") { toggleShortcutSheet(); e.preventDefault(); return; }
+
+  if (!el("shortcutOverlay").classList.contains("hidden")) {
+    if (e.key === "Escape") { toggleShortcutSheet(false); e.preventDefault(); }
+    return;
+  }
+
+  if (readerView.classList.contains("active")) readerShortcut(e);
+  else libraryShortcut(e);
+});
+
+// ---- The shortcut sheet -----------------------------------------------------
+
+function renderShortcutSheet() {
+  el("shortcutList").innerHTML = keys.SHORTCUTS.map((g) => `
+    <div class="sc-group">
+      <h3>${escapeHtml(g.group)}</h3>
+      ${g.items.filter((i) => !i.hide).map((i) => `
+        <div class="sc-row">
+          <span class="sc-keys">${i.keys.map((k) => `<kbd>${escapeHtml(k)}</kbd>`).join("<span class='sc-or'>/</span>")}</span>
+          <span class="sc-label">${escapeHtml(i.label)}</span>
+        </div>`).join("")}
+    </div>`).join("");
+}
+
+function toggleShortcutSheet(force) {
+  const overlay = el("shortcutOverlay");
+  const show = force === undefined ? overlay.classList.contains("hidden") : force;
+  if (show) renderShortcutSheet();
+  overlay.classList.toggle("hidden", !show);
+}
+
+el("shortcutClose").addEventListener("click", () => toggleShortcutSheet(false));
+el("readerKeysBtn").addEventListener("click", () => toggleShortcutSheet(true));
+el("shortcutOverlay").addEventListener("click", (e) => {
+  if (e.target === el("shortcutOverlay")) toggleShortcutSheet(false);
 });
 
 // ---- Immersive reading mode ------------------------------------------------
@@ -1906,8 +2061,8 @@ el("epubContainer") && el("epubContainer").addEventListener("click", (e) => {
   if (currentFormat !== "epub") return;
   const rect = el("epubContainer").getBoundingClientRect();
   const x = e.clientX - rect.left;
-  if (x < rect.width * 0.2) epubReader.prevPage();
-  else if (x > rect.width * 0.8) epubReader.nextPage();
+  if (x < rect.width * 0.2) turnPage(-1);
+  else if (x > rect.width * 0.8) turnPage(1);
 });
 
 

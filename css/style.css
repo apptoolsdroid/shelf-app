@@ -292,6 +292,31 @@ body.reading .lib-actions { display: none; }
 }
 .shelf-sort { flex-shrink: 0; max-width: 150px; font-size: 12.5px; padding: 7px 20px 7px 9px; }
 .shelf-select-btn { flex-shrink: 0; font-size: 12.5px; padding: 7px 11px; }
+.shelf-keys-btn { flex-shrink: 0; font-size: 14px; padding: 6px 10px; line-height: 1; }
+
+/* ---- Shortcut sheet ------------------------------------------------------ */
+.setup-card.shortcut-card { max-width: 640px; width: 100%; }
+.shortcut-list {
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: 6px 26px; margin-bottom: 16px;
+}
+.sc-group { break-inside: avoid; margin-bottom: 10px; }
+.sc-group h3 {
+  font-family: var(--serif); font-size: 11.5px; text-transform: uppercase;
+  letter-spacing: 0.12em; color: var(--brass); margin: 6px 0 7px; font-weight: 700;
+}
+.sc-row { display: flex; align-items: baseline; gap: 9px; padding: 3px 0; font-size: 12.5px; }
+.sc-keys { flex-shrink: 0; display: flex; align-items: baseline; gap: 3px; }
+.sc-or { color: var(--text-dim); font-size: 10px; }
+.sc-label { color: var(--text-dim); }
+kbd {
+  display: inline-block; min-width: 20px; text-align: center;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  font-size: 11px; font-weight: 600; line-height: 1.5;
+  padding: 1px 6px; border-radius: 5px;
+  background: var(--bg); color: var(--text);
+  border: 1px solid var(--border); border-bottom-width: 2px;
+}
 .shelf-select-btn.on { background: var(--accent); color: var(--accent-text); font-weight: 600; }
 
 .shelf-selection {
@@ -434,7 +459,7 @@ body.reading .lib-actions { display: none; }
    A plain list rather than anything clever: one line per book, a colour for
    its state, the reason underneath when there is one, and a retry beside it.
    The point is to be readable at a glance on a tablet held at arm's length. */
-.tracker-card { max-width: 560px; width: 100%; }
+.setup-card.tracker-card { max-width: 560px; width: 100%; }
 
 /* Connection state, at the top where it belongs: nothing else in this panel
    means anything until you know whether the app is talking to anything. */
@@ -635,7 +660,74 @@ body.reading .lib-actions { display: none; }
 /* The page area below the toolbar. The overlay is absolutely positioned
    against THIS, not against the whole reader view, so the toolbar (and the
    back button in it) always stays visible and tappable. */
-.reader-stage { position: relative; flex: 1; min-height: 0; display: flex; }
+.reader-stage {
+  position: relative; flex: 1; min-height: 0; display: flex;
+  /* Gives the page-turn leaf below something to rotate *in*. Without a
+     perspective on the parent, a rotateY is just a horizontal squash. */
+  perspective: 1800px;
+  perspective-origin: 50% 50%;
+  /* A rotated child is not clipped by its parent's bounds, so without this
+     the leaf projects up over the toolbar as it swings. */
+  overflow: clip;
+}
+@supports not (overflow: clip) {
+  .reader-stage { overflow: hidden; }
+}
+
+/* ---- Page turn -------------------------------------------------------------
+   A leaf of paper swinging about the spine. --page-bg is set from the page
+   actually on screen (see pageTurn.js), so this is the book's own paper
+   colour rather than a generic white flash; the gradient darkens towards the
+   hinge the way a real page shades as it lifts. */
+.page-leaf {
+  position: absolute; top: 0; bottom: 0; width: 50%;
+  z-index: 3; pointer-events: none;
+  /* top/bottom/left/right/width are overridden inline to match the page
+     actually on screen; these are the fallback for the first frame. */
+  backface-visibility: hidden;
+  will-change: transform, opacity;
+}
+/* Opaque for most of the swing and only fading at the very end. Fading from
+   the first frame made it a faint wash over the text rather than a sheet of
+   paper moving in front of it — the whole point is that it should look
+   solid. The gradient darkens towards the hinge the way a lifting page
+   shades, and the shadow is thrown onto the page underneath. */
+.page-leaf.forward {
+  right: 0; transform-origin: left center;
+  background: linear-gradient(to left,
+    var(--page-bg) 55%,
+    color-mix(in srgb, var(--page-bg) 80%, #000) 100%);
+  box-shadow: -14px 0 30px -8px rgba(0, 0, 0, 0.45);
+  animation: leafForward 320ms cubic-bezier(0.37, 0.01, 0.3, 1) forwards;
+}
+.page-leaf.back {
+  left: 0; transform-origin: right center;
+  background: linear-gradient(to right,
+    var(--page-bg) 55%,
+    color-mix(in srgb, var(--page-bg) 80%, #000) 100%);
+  box-shadow: 14px 0 30px -8px rgba(0, 0, 0, 0.45);
+  animation: leafBack 320ms cubic-bezier(0.37, 0.01, 0.3, 1) forwards;
+}
+/* Forward: the right-hand page lifts at its outer edge and falls away across
+   the spine. Back: a page swings in from the left and settles flat. */
+@keyframes leafForward {
+  0%   { transform: rotateY(0deg);    opacity: 1; }
+  70%  { transform: rotateY(-72deg);  opacity: 1; }
+  100% { transform: rotateY(-104deg); opacity: 0; }
+}
+@keyframes leafBack {
+  0%   { transform: rotateY(104deg);  opacity: 0; }
+  30%  { transform: rotateY(72deg);   opacity: 1; }
+  100% { transform: rotateY(0deg);    opacity: 1; }
+}
+/* Browsers without color-mix still get a solid leaf in the right colour —
+   just without the shading towards the hinge. */
+@supports not (background: color-mix(in srgb, red 50%, blue)) {
+  .page-leaf.forward, .page-leaf.back { background: var(--page-bg); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .page-leaf { display: none; }
+}
 
 /* ---- Immersive reading: bars out of the way ------------------------------
    Tapping the middle of the page collapses the top bar and the reader toolbar

@@ -6,6 +6,7 @@
 import * as annotations from "./annotations.js";
 import { attachSwipe } from "./gestures.js";
 import { watchSize } from "./reflow.js";
+import { sampleEpubColor } from "./pageTurn.js";
 
 let book = null;
 let rendition = null;
@@ -14,6 +15,7 @@ let containerEl = null;
 let resizeObserver = null;
 let lastCfi = null;
 let onTapCenter = null;
+let onTurn = null;
 
 // Roughly how far through the book we are, as a 0–1 fraction, for the progress
 // bar on the cover. epub.js can give an exact percentage, but only after
@@ -32,9 +34,10 @@ function estimateProgress(location) {
   return undefined;
 }
 
-export async function openEpub({ container, blob, savedLocation, onLocation, onTapCenter: tapCenter }) {
+export async function openEpub({ container, blob, savedLocation, onLocation, onTapCenter: tapCenter, onTurn: turn }) {
   onLocationChange = onLocation;
   onTapCenter = tapCenter;
+  onTurn = turn;
   containerEl = container;
   const arrayBuffer = await blob.arrayBuffer();
   book = ePub(arrayBuffer);
@@ -52,6 +55,9 @@ export async function openEpub({ container, blob, savedLocation, onLocation, onT
   rendition.hooks.content.register((contents) => {
     const doc = contents.document;
     if (!doc) return;
+    // Each chapter can carry its own styling, so the paper colour is read
+    // per chapter rather than assumed once for the whole book.
+    sampleEpubColor(doc);
     attachSwipe(doc.documentElement, {
       onPrev: () => prevPage(),
       onNext: () => nextPage(),
@@ -149,10 +155,12 @@ export function goToCfi(cfi) {
 }
 
 export function nextPage() {
+  if (onTurn) onTurn(1);
   rendition.next();
 }
 
 export function prevPage() {
+  if (onTurn) onTurn(-1);
   rendition.prev();
 }
 
@@ -202,4 +210,5 @@ export function destroy() {
   rendition = null;
   resizeObserver = null;
   lastCfi = null;
+  onTurn = null;
 }

@@ -147,12 +147,13 @@
       <button class="btn icon pdf-only hidden" id="zoomFitBtn" title="Fit to screen">Fit</button>
       <button class="btn icon pdf-only hidden" id="zoomInBtn" title="Zoom in">+</button>
 
+      <button class="btn icon" id="readerKeysBtn" title="Keyboard shortcuts (?)" aria-label="Keyboard shortcuts">⌨</button>
       <button class="btn primary" id="saveBtn">Save</button>
     </div>
     <!-- The stage is what the loading/error overlay covers. The toolbar above
          it is deliberately outside, so the back button can never be hidden
          behind the overlay if a book is slow to load or fails to load. -->
-    <div class="reader-stage">
+    <div class="reader-stage" id="readerStage">
       <div id="readerContainer">
         <div id="epubContainer" class="hidden"></div>
         <div id="pdfContainer" class="hidden"></div>
@@ -273,6 +274,19 @@
       <div class="tracker-list" id="trackerList"></div>
       <div class="setup-actions">
         <button class="btn" id="trackerClose">Close</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- The shortcut sheet. Built from the same table the handler uses, so a
+       key that works is a key that's listed. -->
+  <div id="shortcutOverlay" class="setup-overlay hidden">
+    <div class="setup-card shortcut-card">
+      <h2>Keyboard shortcuts</h2>
+      <p class="setup-intro">Press <kbd>?</kbd> any time to bring this back.</p>
+      <div class="shortcut-list" id="shortcutList"></div>
+      <div class="setup-actions">
+        <button class="btn primary" id="shortcutClose">Close</button>
       </div>
     </div>
   </div>

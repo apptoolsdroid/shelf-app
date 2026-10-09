@@ -5,7 +5,7 @@
 // every cache that isn't the current name, which is what forces an already
 // installed copy on a tablet to pick up the new files instead of serving the
 // old ones forever.
-const CACHE_NAME = "shelf-shell-v1.28.0";
+const CACHE_NAME = "shelf-shell-v1.29.0";
 const SHELL_FILES = [
   "./",
   "./index.html",
@@ -20,6 +20,8 @@ const SHELL_FILES = [
   "./js/gestures.js",
   "./js/reflow.js",
   "./js/fileSync.js",
+  "./js/pageTurn.js",
+  "./js/shortcuts.js",
   "./js/ink.js",
   "./js/notes.js",
   "./js/version.js",
