@@ -680,50 +680,60 @@ kbd {
    colour rather than a generic white flash; the gradient darkens towards the
    hinge the way a real page shades as it lifts. */
 .page-leaf {
-  position: absolute; top: 0; bottom: 0; width: 50%;
-  z-index: 3; pointer-events: none;
-  /* top/bottom/left/right/width are overridden inline to match the page
-     actually on screen; these are the fallback for the first frame. */
+  position: absolute; inset: 0;
+  z-index: 3; pointer-events: none; overflow: hidden;
+  /* inset is overridden inline to match the page actually on screen. */
+  background: var(--page-bg);
   backface-visibility: hidden;
-  will-change: transform, opacity;
+  will-change: transform;
+  box-shadow: 0 0 24px -4px rgba(0, 0, 0, 0.4);
+}
+/* When the leaf carries a picture of the page it's replacing, that picture
+   is the whole of it. */
+.page-leaf.has-page { background: none; }
+.page-leaf > canvas { width: 100%; height: 100%; display: block; }
+
+/* The shading deepens as the sheet turns edge-on to the light. A separate
+   element so it can fade on its own curve rather than being baked into the
+   leaf's own transform. */
+.page-leaf-shade {
+  position: absolute; inset: 0; opacity: 0;
+  background: linear-gradient(to left, rgba(0,0,0,0.45), rgba(0,0,0,0) 65%);
+}
+.page-leaf.back .page-leaf-shade {
+  background: linear-gradient(to right, rgba(0,0,0,0.45), rgba(0,0,0,0) 65%);
+}
+.page-leaf.forward .page-leaf-shade { animation: leafShade var(--turn-ms) ease-in forwards; }
+.page-leaf.back .page-leaf-shade { animation: leafShade var(--turn-ms) ease-in forwards; }
+@keyframes leafShade {
+  0%   { opacity: 0; }
+  100% { opacity: 1; }
 }
 /* Opaque for most of the swing and only fading at the very end. Fading from
    the first frame made it a faint wash over the text rather than a sheet of
    paper moving in front of it — the whole point is that it should look
    solid. The gradient darkens towards the hinge the way a lifting page
    shades, and the shadow is thrown onto the page underneath. */
+/* Both directions rotate the page you're leaving about the spine, revealing
+   the page that is already sitting underneath. Easing out hard, the way a
+   sheet of paper falls: quick to lift, slow to land. */
 .page-leaf.forward {
-  right: 0; transform-origin: left center;
-  background: linear-gradient(to left,
-    var(--page-bg) 55%,
-    color-mix(in srgb, var(--page-bg) 80%, #000) 100%);
-  box-shadow: -14px 0 30px -8px rgba(0, 0, 0, 0.45);
-  animation: leafForward 320ms cubic-bezier(0.37, 0.01, 0.3, 1) forwards;
+  transform-origin: left center;
+  animation: leafForward var(--turn-ms) cubic-bezier(0.33, 0.0, 0.2, 1) forwards;
 }
 .page-leaf.back {
-  left: 0; transform-origin: right center;
-  background: linear-gradient(to right,
-    var(--page-bg) 55%,
-    color-mix(in srgb, var(--page-bg) 80%, #000) 100%);
-  box-shadow: 14px 0 30px -8px rgba(0, 0, 0, 0.45);
-  animation: leafBack 320ms cubic-bezier(0.37, 0.01, 0.3, 1) forwards;
+  transform-origin: right center;
+  animation: leafBack var(--turn-ms) cubic-bezier(0.33, 0.0, 0.2, 1) forwards;
 }
-/* Forward: the right-hand page lifts at its outer edge and falls away across
-   the spine. Back: a page swings in from the left and settles flat. */
 @keyframes leafForward {
-  0%   { transform: rotateY(0deg);    opacity: 1; }
-  70%  { transform: rotateY(-72deg);  opacity: 1; }
-  100% { transform: rotateY(-104deg); opacity: 0; }
+  0%   { transform: rotateY(0deg); }
+  85%  { transform: rotateY(-86deg); }
+  100% { transform: rotateY(-96deg); opacity: 0; }
 }
 @keyframes leafBack {
-  0%   { transform: rotateY(104deg);  opacity: 0; }
-  30%  { transform: rotateY(72deg);   opacity: 1; }
-  100% { transform: rotateY(0deg);    opacity: 1; }
-}
-/* Browsers without color-mix still get a solid leaf in the right colour —
-   just without the shading towards the hinge. */
-@supports not (background: color-mix(in srgb, red 50%, blue)) {
-  .page-leaf.forward, .page-leaf.back { background: var(--page-bg); }
+  0%   { transform: rotateY(0deg); }
+  85%  { transform: rotateY(86deg); }
+  100% { transform: rotateY(96deg); opacity: 0; }
 }
 @media (prefers-reduced-motion: reduce) {
   .page-leaf { display: none; }

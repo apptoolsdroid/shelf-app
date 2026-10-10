@@ -11,7 +11,7 @@ import * as annotations from "./annotations.js";
 import { attachSwipe } from "./gestures.js";
 import { attachInk, renderStrokes } from "./ink.js";
 import { watchSize } from "./reflow.js";
-import { samplePdfColor } from "./pageTurn.js";
+import { samplePdfColor, snapshotOf } from "./pageTurn.js";
 
 // pdf.js v4 ships as an ES module only — loading it with a plain <script> tag
 // silently leaves pdfjsLib undefined and every PDF fails to open. Import it
@@ -95,7 +95,9 @@ function stageEl() {
 
 function attachResizeHandling() {
   if (resizeObserver) resizeObserver.disconnect();
-  resizeObserver = watchSize(stageEl(), () => render());
+  // A new size means a new scale, so everything already drawn is the wrong
+  // size — keeping it would only fill the cache with pages that never match.
+  resizeObserver = watchSize(stageEl(), () => { dropCache(); render(); });
 }
 
 // ---- Fit-to-screen scale calculation ---------------------------------------
@@ -299,7 +301,7 @@ function drawSavedUnderlines(layerEl, viewport, pageNum) {
 
 let renderToken = 0;
 
-async function render() {
+async function render(turn = 0) {
   if (!pdfDoc) return;
   // Tell the guard what size this render is for, so a notification reporting
   // that same size isn't mistaken for a change worth redrawing.
@@ -309,28 +311,87 @@ async function render() {
   // that still has a scrollbar gutter reserved in it.
   containerEl.style.overflow = viewMode === "scroll" || zoomFactor > 1 ? "auto" : "hidden";
   if (viewMode === "scroll") await renderScrollView();
-  else await renderPagedView();
+  else await renderPagedView(turn);
   notifyState();
 }
 
-async function renderPagedView() {
+// Pages already drawn, keyed by which pages at which scale. Turning is only
+// instant if the next page exists before you ask for it, and without that the
+// animation always finishes before the page does.
+const pageCache = new Map();
+const CACHE_LIMIT = 6;
+
+function cacheKey(pages, scale) {
+  return `${pages.join(",")}@${scale.toFixed(3)}`;
+}
+
+function remember(key, node) {
+  pageCache.set(key, node);
+  while (pageCache.size > CACHE_LIMIT) {
+    pageCache.delete(pageCache.keys().next().value);
+  }
+}
+
+function dropCache() {
+  pageCache.clear();
+}
+
+async function buildStage(pages, scale, token) {
+  const stage = document.createElement("div");
+  stage.className = "pdf-stage";
+  Object.assign(stage.style, { display: "flex", gap: "12px", margin: "auto" });
+  for (const p of pages) {
+    stage.appendChild(await buildPageEl(p, scale));
+    if (token !== undefined && token !== renderToken) return null;
+  }
+  return stage;
+}
+
+// Draws the pages either side of this one while nothing else is happening,
+// so the common case — reading forwards — never waits.
+let prefetchTimer = null;
+function prefetchNeighbours(pages, scale) {
+  clearTimeout(prefetchTimer);
+  prefetchTimer = setTimeout(async () => {
+    const anchor = pages[0];
+    const targets = [];
+    const fwd = viewMode === "double" ? getSpreadPages(anchor + pages.length) : [anchor + 1];
+    const back = viewMode === "double" ? getSpreadPages(Math.max(1, anchor - 1)) : [anchor - 1];
+    for (const set of [fwd, back]) {
+      if (set.every((n) => n >= 1 && n <= pdfDoc.numPages)) targets.push(set);
+    }
+    for (const set of targets) {
+      const key = cacheKey(set, scale);
+      if (pageCache.has(key)) continue;
+      try {
+        const node = await buildStage(set, scale);
+        if (node) remember(key, node);
+      } catch (_) { /* a failed look-ahead just means a slower turn */ }
+    }
+  }, 120);
+}
+
+// `turn` is +1/-1 when this render is a page turn, which is what decides
+// whether the swap is dressed with an animation.
+async function renderPagedView(turn = 0) {
   const myToken = ++renderToken;
   const pages = viewMode === "double" ? getSpreadPages(currentPage) : [currentPage];
   currentPage = pages[0];
   const scale = currentScale(pages.length);
+  const key = cacheKey(pages, scale);
 
-  // Built detached from the document, so the reader keeps showing the page it
-  // already has until the new one is completely ready. Clearing first and
-  // filling afterwards is what produced a blank flash on every redraw —
-  // barely visible on a fast screen, very visible on a Retina tablet where
-  // each canvas is four times the pixels.
-  const stage = document.createElement("div");
-  stage.className = "pdf-stage";
-  Object.assign(stage.style, { display: "flex", gap: "12px", margin: "auto" });
+  // The picture of the page being left behind has to be taken before the
+  // swap, while it's still on screen.
+  const outgoing = containerEl.querySelector(".pdf-stage");
+  const snapshot = turn && outgoing ? snapshotOf(outgoing) : null;
 
-  for (const p of pages) {
-    stage.appendChild(await buildPageEl(p, scale));
-    if (myToken !== renderToken) return; // a newer render started; drop this one
+  let stage = pageCache.get(key);
+  if (!stage) {
+    // Built detached from the document, so the reader keeps showing the page
+    // it already has until the new one is completely ready.
+    stage = await buildStage(pages, scale, myToken);
+    if (!stage || myToken !== renderToken) return;
+    remember(key, stage);
   }
 
   if (myToken !== renderToken) return;
@@ -340,11 +401,16 @@ async function renderPagedView() {
   // there is nothing to scroll to and the scroller is switched off outright.
   // This is the mode that blinked: a fitted page sits right on the threshold
   // where a scrollbar appears, and a scrollbar appearing narrows the box the
-  // page was fitted to, so it gets refitted, so the scrollbar goes away, so it
-  // gets refitted again — forever. Continuous scroll never did this because
-  // its content always overflows, so its scrollbar never flickers. Zoomed in
-  // past the fit, panning is the whole point, so scrolling comes back.
+  // page was fitted to, so it gets refitted, so the scrollbar goes away, so
+  // it gets refitted again — forever.
   containerEl.replaceChildren(stage);
+
+  // The new page is in place; only now does the old one sweep off it. Doing
+  // it in this order is what keeps the picture and the page change together
+  // instead of one trailing the other.
+  if (turn && onTurn) onTurn(turn, snapshot);
+
+  prefetchNeighbours(pages, scale);
 }
 
 async function renderScrollView() {
@@ -417,8 +483,7 @@ export function nextPage() {
   // happen is worse than not animating at all.
   if (target === currentPage) return;
   currentPage = target;
-  if (onTurn) onTurn(1);
-  return render();
+  return render(1);
 }
 
 export function prevPage() {
@@ -428,12 +493,12 @@ export function prevPage() {
     : Math.max(1, currentPage - 1);
   if (target === currentPage) return; // already at the front of the book
   currentPage = target;
-  if (onTurn) onTurn(-1);
-  return render();
+  return render(-1);
 }
 
 export function setViewMode(mode) {
   viewMode = mode;
+  dropCache();
   return render();
 }
 
@@ -443,11 +508,13 @@ export function getViewMode() {
 
 export function setZoom(factor) {
   zoomFactor = Math.max(0.5, Math.min(3, factor));
+  dropCache();
   return render();
 }
 
 export function resetZoomToFit() {
   zoomFactor = 1;
+  dropCache();
   return render();
 }
 
@@ -461,6 +528,8 @@ export function getPageInfo() {
 
 export function destroy() {
   onTurn = null;
+  clearTimeout(prefetchTimer);
+  dropCache();
   if (resizeObserver) resizeObserver.disconnect();
   if (scrollObserver) scrollObserver.disconnect();
   pdfDoc = null;

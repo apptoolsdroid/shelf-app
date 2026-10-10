@@ -1865,8 +1865,10 @@ function turnPage(dir) {
 
 // Picture and sound together, from the one place, so they can never
 // disagree about which way the page went.
-function animateTurn(dir) {
-  pageTurn.playTurn(el("readerStage"), dir);
+// Called once the new page is already in place, with a picture of the one
+// being left behind. Picture and sound start together on the same frame.
+function animateTurn(dir, snapshot = null) {
+  pageTurn.playTurn(el("readerStage"), dir, snapshot);
   sound.playPageTurn(dir);
 }
 
