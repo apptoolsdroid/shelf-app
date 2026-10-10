@@ -11,7 +11,7 @@ import * as annotations from "./annotations.js";
 import { attachSwipe } from "./gestures.js";
 import { attachInk, renderStrokes } from "./ink.js";
 import { watchSize } from "./reflow.js";
-import { samplePdfColor, snapshotOf } from "./pageTurn.js";
+import { samplePdfColor, captureSpread, buildScene } from "./pageTurn.js";
 
 // pdf.js v4 ships as an ES module only — loading it with a plain <script> tag
 // silently leaves pdfjsLib undefined and every PDF fails to open. Import it
@@ -380,10 +380,10 @@ async function renderPagedView(turn = 0) {
   const scale = currentScale(pages.length);
   const key = cacheKey(pages, scale);
 
-  // The picture of the page being left behind has to be taken before the
-  // swap, while it's still on screen.
+  // Photographed before the swap, while the outgoing pages are still on
+  // screen and have a geometry to measure.
   const outgoing = containerEl.querySelector(".pdf-stage");
-  const snapshot = turn && outgoing ? snapshotOf(outgoing) : null;
+  const before = turn && outgoing ? captureSpread(stageEl()) : null;
 
   let stage = pageCache.get(key);
   if (!stage) {
@@ -408,7 +408,12 @@ async function renderPagedView(turn = 0) {
   // The new page is in place; only now does the old one sweep off it. Doing
   // it in this order is what keeps the picture and the page change together
   // instead of one trailing the other.
-  if (turn && onTurn) onTurn(turn, snapshot);
+  if (turn && onTurn) {
+    // And again immediately after, which is what gives the sheet its reverse
+    // side: the page that will be facing you once it has come down.
+    const after = before ? captureSpread(stageEl()) : null;
+    onTurn(turn, buildScene(before, after, turn));
+  }
 
   prefetchNeighbours(pages, scale);
 }
@@ -477,22 +482,33 @@ export async function bookmarkCurrentPage(label) {
 
 export function nextPage() {
   if (viewMode === "scroll") return;
-  const step = viewMode === "double" ? getSpreadPages(currentPage).length || 2 : 1;
-  const target = Math.min(currentPage + Math.max(step, 1), pdfDoc.numPages);
-  // Nothing moved — we're on the last page. Animating a turn that didn't
-  // happen is worse than not animating at all.
-  if (target === currentPage) return;
-  currentPage = target;
+  // Compared as spreads, not as page numbers. Stepping the anchor forward
+  // can land back inside the spread you are already looking at — at the end
+  // of an odd-length book, say — and the old check didn't notice, so the
+  // page appeared to turn onto itself.
+  if (viewMode === "double") {
+    const current = getSpreadPages(currentPage);
+    const nextAnchor = current[current.length - 1] + 1;
+    if (nextAnchor > pdfDoc.numPages) return; // no spread after this one
+    currentPage = nextAnchor;
+  } else {
+    const target = Math.min(currentPage + 1, pdfDoc.numPages);
+    if (target === currentPage) return; // already on the last page
+    currentPage = target;
+  }
   return render(1);
 }
 
 export function prevPage() {
   if (viewMode === "scroll") return;
-  const target = viewMode === "double"
-    ? Math.max(1, getSpreadPages(currentPage)[0] - 1)
-    : Math.max(1, currentPage - 1);
-  if (target === currentPage) return; // already at the front of the book
-  currentPage = target;
+  if (viewMode === "double") {
+    const current = getSpreadPages(currentPage);
+    if (current[0] <= 1) return; // already at the cover
+    currentPage = current[0] - 1;
+  } else {
+    if (currentPage <= 1) return; // already at the front of the book
+    currentPage -= 1;
+  }
   return render(-1);
 }
 

@@ -702,12 +702,23 @@ kbd {
   backface-visibility: hidden; -webkit-backface-visibility: hidden;
 }
 /* An EPUB has no canvas to photograph, so its sheet is plain paper. */
-.leaf-front.blank { background: var(--page-bg); }
+.leaf-front.blank, .leaf-back.blank { background: var(--page-bg); }
+
+/* The page that is NOT turning, held in place over content that has already
+   changed beneath it. Below the sheet, above the page. */
+.page-underlay {
+  position: absolute; z-index: 2; pointer-events: none; overflow: hidden;
+  background: var(--page-bg);
+}
+.page-underlay canvas { width: 100%; height: 100%; display: block; }
 
 /* The reverse of the sheet: the same paper, a shade darker, lit from the
    spine side the way the back of a lifted page is. */
-.leaf-back {
-  transform: rotateY(180deg);
+.leaf-back { transform: rotateY(180deg); }
+/* With no photograph for the reverse — a single-page view, or an EPUB — the
+   back is plain paper, lit from the spine the way the back of a lifted page
+   is. */
+.leaf-back.blank {
   background:
     linear-gradient(to left, rgba(0,0,0,0.16), rgba(0,0,0,0.03) 45%, rgba(255,255,255,0.05)),
     var(--page-bg);
@@ -765,9 +776,12 @@ kbd {
   50%  { transform: rotateY(90deg) translateZ(16px); }
   100% { transform: rotateY(180deg) translateZ(0); }
 }
-/* The sheet is fully opaque for the whole arc and only lets go once it is
-   lying flat on the far side. */
-.leaf-back { animation: leafSettle var(--turn-ms) linear forwards; }
+/* The sheet lets go at the very end — but only where it has landed on bare
+   background, as in a single-page view. In a spread it comes down on the
+   facing page and its reverse IS that page, pixel for pixel, so it is simply
+   removed when the real one beneath takes over. Fading there would uncover
+   the underlay for a frame and flash the previous page back up. */
+.page-leaf.fades .leaf-back { animation: leafSettle var(--turn-ms) linear forwards; }
 @keyframes leafSettle {
   0%, 90% { opacity: 1; }
   100%    { opacity: 0; }

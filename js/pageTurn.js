@@ -70,31 +70,38 @@ export function sampleEpubColor(doc) {
   }
 }
 
-// A still of a rendered page, for the leaf to carry. Copying the pixels is a
-// single GPU blit and leaves the original untouched, which matters because
-// the original stays in the page cache ready to be shown again.
-export function snapshotOf(element) {
+// A still of the turning page, drawn into the leaf's own footprint. Copying
+// the pixels is a single GPU blit and leaves the original untouched, which
+// matters because the original stays in the page cache ready to be shown
+// again.
+function snapshotInto(sources, rect) {
   try {
-    const canvases = [...element.querySelectorAll("canvas")];
-    if (!canvases.length) return null;
-    const rect = element.getBoundingClientRect();
-    if (!rect.width || !rect.height) return null;
+    const width = rect.right - rect.left;
+    const height = rect.bottom - rect.top;
+    if (width <= 0 || height <= 0) return null;
 
     const dpr = Math.min(window.devicePixelRatio || 1, 2);
     const out = document.createElement("canvas");
-    out.width = Math.max(1, Math.floor(rect.width * dpr));
-    out.height = Math.max(1, Math.floor(rect.height * dpr));
+    out.width = Math.max(1, Math.floor(width * dpr));
+    out.height = Math.max(1, Math.floor(height * dpr));
     const ctx = out.getContext("2d");
+    // The leaf reaches to the spine, which is slightly wider than the page
+    // itself; the gutter it gains is painted as paper so the sheet has no
+    // transparent edge.
     ctx.fillStyle = pageColor;
     ctx.fillRect(0, 0, out.width, out.height);
 
-    // Each page canvas is drawn where it sits relative to the whole group, so
-    // a two-page spread comes out as one image of the spread.
-    for (const c of canvases) {
-      const r = c.getBoundingClientRect();
-      ctx.drawImage(c, (r.left - rect.left) * dpr, (r.top - rect.top) * dpr,
-                    r.width * dpr, r.height * dpr);
+    let drew = false;
+    for (const el of sources) {
+      for (const c of el.querySelectorAll("canvas")) {
+        const r = c.getBoundingClientRect();
+        if (!r.width || !r.height) continue;
+        ctx.drawImage(c, (r.left - rect.left) * dpr, (r.top - rect.top) * dpr,
+                      r.width * dpr, r.height * dpr);
+        drew = true;
+      }
     }
+    if (!drew) return null;
     out.style.width = "100%";
     out.style.height = "100%";
     out.style.display = "block";
@@ -102,6 +109,33 @@ export function snapshotOf(element) {
   } catch (_) {
     return null; // a tainted or zero-sized canvas just means a plain leaf
   }
+}
+
+// EPUB draws its columns inside one iframe, so there is no element per page
+// to measure or photograph. This gives the sheet the right footprint anyway.
+function epubBox(stage, dir) {
+  const frame = stage.querySelector("#epubContainer iframe");
+  if (!frame) return null;
+  const s = stage.getBoundingClientRect();
+  const r = frame.getBoundingClientRect();
+  if (!r.width || !r.height) return null;
+  // A wide screen is laid out as two columns, and only half of it should
+  // lift; a narrow one is a single column and turns whole.
+  const spread = r.width > r.height * 1.15;
+  const spine = r.left + r.width / 2;
+  const rect = spread
+    ? (dir > 0 ? { left: spine, right: r.right, top: r.top, bottom: r.bottom }
+               : { left: r.left, right: spine, top: r.top, bottom: r.bottom })
+    : { left: r.left, right: r.right, top: r.top, bottom: r.bottom };
+  return {
+    box: {
+      top: Math.max(0, rect.top - s.top),
+      bottom: Math.max(0, s.bottom - rect.bottom),
+      left: Math.max(0, rect.left - s.left),
+      right: Math.max(0, s.right - rect.right),
+    },
+    snapshot: null,
+  };
 }
 
 function prefersReducedMotion() {
@@ -112,21 +146,79 @@ function prefersReducedMotion() {
   }
 }
 
-// Where the page sits inside the stage, as insets.
-function pageBox(stage) {
-  const pages = [...stage.querySelectorAll(".pdf-page-wrapper")];
-  const el = pages[0] || stage.querySelector("#epubContainer iframe");
-  if (!el) return null;
+/**
+ * Photograph each half of what's currently on screen.
+ *
+ * Each slot reaches to the spine rather than stopping at the page's own
+ * edge, so a sheet hinged there lands exactly on the facing page instead of
+ * a few pixels adrift of it.
+ */
+export function captureSpread(stage) {
+  if (!stage) return null;
   const s = stage.getBoundingClientRect();
-  const first = el.getBoundingClientRect();
-  if (!first.width || !first.height) return null;
-  const left = pages.length ? Math.min(...pages.map((n) => n.getBoundingClientRect().left)) : first.left;
-  const right = pages.length ? Math.max(...pages.map((n) => n.getBoundingClientRect().right)) : first.right;
+  const pages = [...stage.querySelectorAll(".pdf-page-wrapper")];
+  if (!pages.length) return null;
+  const rs = pages.map((p) => p.getBoundingClientRect());
+  if (!rs[0].width) return null;
+  const twoUp = pages.length > 1;
+  const spine = twoUp ? (rs[0].right + rs[1].left) / 2 : null;
+
+  const slot = (el, r, which) => {
+    const rect = !twoUp
+      ? { left: r.left, right: r.right, top: r.top, bottom: r.bottom }
+      : which === "left"
+        ? { left: r.left, right: spine, top: r.top, bottom: r.bottom }
+        : { left: spine, right: r.right, top: r.top, bottom: r.bottom };
+    return {
+      box: {
+        top: Math.max(0, rect.top - s.top),
+        bottom: Math.max(0, s.bottom - rect.bottom),
+        left: Math.max(0, rect.left - s.left),
+        right: Math.max(0, s.right - rect.right),
+      },
+      canvas: snapshotInto([el], rect),
+    };
+  };
+
   return {
-    top: Math.max(0, first.top - s.top),
-    bottom: Math.max(0, s.bottom - first.bottom),
-    left: Math.max(0, left - s.left),
-    right: Math.max(0, s.right - right),
+    twoUp,
+    left: slot(pages[0], rs[0], "left"),
+    right: twoUp ? slot(pages[1], rs[1], "right") : null,
+  };
+}
+
+/**
+ * Assemble the turn from a photograph of the spread before the swap and one
+ * of the spread after it.
+ *
+ * A book turns one leaf, and that leaf has a page on each side. Going
+ * forward from 4|5 to 6|7, the sheet carrying 5 lifts; its reverse is 6; and
+ * 7 is revealed behind it. Page 4 stays where it is until the sheet comes
+ * down on top of it. Swapping the whole opening at once instead — which is
+ * what the content underneath actually does — makes the left-hand page jump
+ * to its new number while the right-hand one is still in mid-air. The
+ * underlay below holds the old left page in place for the duration, so only
+ * one page is ever moving and nothing changes before it should.
+ */
+export function buildScene(before, after, dir) {
+  if (!before) return null;
+  if (!before.twoUp) {
+    return { box: before.left.box, snapshot: before.left.canvas, back: null, underlay: null };
+  }
+  const settled = after && after.twoUp ? after : null;
+  if (dir > 0) {
+    return {
+      box: before.right.box,
+      snapshot: before.right.canvas,          // the page being turned
+      back: settled ? settled.left.canvas : null,  // its reverse: the new left page
+      underlay: { box: before.left.box, canvas: before.left.canvas },
+    };
+  }
+  return {
+    box: before.left.box,
+    snapshot: before.left.canvas,
+    back: settled ? settled.right.canvas : null,
+    underlay: before.right ? { box: before.right.box, canvas: before.right.canvas } : null,
   };
 }
 
@@ -135,10 +227,10 @@ function pageBox(stage) {
  *
  * @param {Element} stage        the .reader-stage element
  * @param {number} dir           +1 forward, -1 back
- * @param {Element|null} snapshot  a still of the page being left behind;
- *                                 without one the leaf is plain paper
+ * @param {{box, snapshot}|null} visual  the measured footprint of the page
+ *                                 being left behind, and a still of it
  */
-export function playTurn(stage, dir, snapshot = null) {
+export function playTurn(stage, dir, visual = null) {
   if (!stage || prefersReducedMotion()) return 0;
 
   // Turning quickly shouldn't queue up a backlog — the newest turn replaces
@@ -150,12 +242,18 @@ export function playTurn(stage, dir, snapshot = null) {
   }
   const ms = hurried ? FAST_MS : DURATION_MS;
 
+  const measuredEarly = visual || epubBox(stage, dir);
   const leaf = document.createElement("div");
-  leaf.className = `page-leaf ${dir > 0 ? "forward" : "back"}`;
+  const seamless = !!(measuredEarly && measuredEarly.underlay && measuredEarly.back);
+  // Without a facing page to come down on, the sheet fades out at the end
+  // instead of simply vanishing off the background.
+  leaf.className = `page-leaf ${dir > 0 ? "forward" : "back"}${seamless ? "" : " fades"}`;
   leaf.style.setProperty("--page-bg", pageColor);
   leaf.style.setProperty("--turn-ms", `${ms}ms`);
 
-  const box = pageBox(stage);
+  const measured = measuredEarly;
+  const box = measured && measured.box;
+  const snapshot = measured && measured.snapshot;
   if (box) {
     leaf.style.top = `${box.top}px`;
     leaf.style.bottom = `${box.bottom}px`;
@@ -173,6 +271,8 @@ export function playTurn(stage, dir, snapshot = null) {
 
   const back = document.createElement("span");
   back.className = "leaf-face leaf-back";
+  if (measured && measured.back) back.appendChild(measured.back);
+  else back.classList.add("blank");
 
   // Shading that deepens as the leaf turns edge-on: a sheet catching the
   // light rather than a rectangle rotating.
@@ -181,11 +281,30 @@ export function playTurn(stage, dir, snapshot = null) {
   front.appendChild(shade);
 
   leaf.append(front, back);
+
+  // Holds the page that is NOT turning exactly as it was, over the top of
+  // the content that has already changed underneath.
+  let under = null;
+  if (measured && measured.underlay && measured.underlay.canvas) {
+    under = document.createElement("div");
+    under.className = "page-underlay";
+    const u = measured.underlay.box;
+    under.style.top = `${u.top}px`;
+    under.style.bottom = `${u.bottom}px`;
+    under.style.left = `${u.left}px`;
+    under.style.right = `${u.right}px`;
+    under.appendChild(measured.underlay.canvas);
+    stage.appendChild(under);
+  }
+
   stage.appendChild(leaf);
   running = leaf;
 
   const done = () => {
     leaf.remove();
+    // Removed with the sheet, never before it: the sheet is lying over this
+    // by then, so the real page beneath takes its place unseen.
+    if (under) under.remove();
     if (running === leaf) {
       running = null;
       lastFinish = performance.now();

@@ -1867,8 +1867,8 @@ function turnPage(dir) {
 // disagree about which way the page went.
 // Called once the new page is already in place, with a picture of the one
 // being left behind. Picture and sound start together on the same frame.
-function animateTurn(dir, snapshot = null) {
-  const ms = pageTurn.playTurn(el("readerStage"), dir, snapshot);
+function animateTurn(dir, visual = null) {
+  const ms = pageTurn.playTurn(el("readerStage"), dir, visual);
   sound.playPageTurn(dir, ms || undefined);
 }
 
