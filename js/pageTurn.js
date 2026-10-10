@@ -18,10 +18,18 @@
 // revealed either way.
 // ============================================================================
 
-const DURATION_MS = 360;
+// Slow enough to watch the whole arc. A page turn is the one animation in a
+// reader worth seeing, and at the old third of a second the sheet was gone
+// before the eye had followed it — which made the page look like it had
+// simply changed, with some decoration playing afterwards.
+const DURATION_MS = 820;
+// Holding the arrow key or flicking through a chapter is a different
+// intention: there, each turn should get out of the way of the next.
+const FAST_MS = 380;
 
 let pageColor = "#f7f3e9"; // the reader's default parchment, until told otherwise
 let running = null;
+let lastFinish = 0;
 
 export function setPageColor(color) {
   if (color) pageColor = color;
@@ -131,19 +139,21 @@ function pageBox(stage) {
  *                                 without one the leaf is plain paper
  */
 export function playTurn(stage, dir, snapshot = null) {
-  if (!stage || prefersReducedMotion()) return;
+  if (!stage || prefersReducedMotion()) return 0;
 
   // Turning quickly shouldn't queue up a backlog — the newest turn replaces
-  // whatever was still playing.
+  // whatever was still playing, and takes the short version.
+  const hurried = !!running || (performance.now() - lastFinish) < 260;
   if (running) {
     running.remove();
     running = null;
   }
+  const ms = hurried ? FAST_MS : DURATION_MS;
 
   const leaf = document.createElement("div");
   leaf.className = `page-leaf ${dir > 0 ? "forward" : "back"}`;
   leaf.style.setProperty("--page-bg", pageColor);
-  leaf.style.setProperty("--turn-ms", `${DURATION_MS}ms`);
+  leaf.style.setProperty("--turn-ms", `${ms}ms`);
 
   const box = pageBox(stage);
   if (box) {
@@ -153,28 +163,39 @@ export function playTurn(stage, dir, snapshot = null) {
     leaf.style.right = `${box.right}px`;
   }
 
-  if (snapshot) {
-    leaf.classList.add("has-page");
-    leaf.appendChild(snapshot);
-  }
+  // Two faces, so the sheet can go all the way over and you see its reverse
+  // on the way. Without a back face a 180° turn shows the page mirrored,
+  // which is the thing that gives away a fake page turn immediately.
+  const front = document.createElement("span");
+  front.className = "leaf-face leaf-front";
+  if (snapshot) front.appendChild(snapshot);
+  else front.classList.add("blank");
 
-  // Shading that deepens as the leaf turns edge-on, which is what sells it as
-  // a sheet catching the light rather than a rectangle rotating.
+  const back = document.createElement("span");
+  back.className = "leaf-face leaf-back";
+
+  // Shading that deepens as the leaf turns edge-on: a sheet catching the
+  // light rather than a rectangle rotating.
   const shade = document.createElement("span");
   shade.className = "page-leaf-shade";
-  leaf.appendChild(shade);
+  front.appendChild(shade);
 
+  leaf.append(front, back);
   stage.appendChild(leaf);
   running = leaf;
 
   const done = () => {
     leaf.remove();
-    if (running === leaf) running = null;
+    if (running === leaf) {
+      running = null;
+      lastFinish = performance.now();
+    }
   };
   leaf.addEventListener("animationend", (e) => {
     if (e.target === leaf) done();
   }, { once: true });
   // Belt and braces: if the animation never fires (a backgrounded tab, say)
   // the leaf must not be left sitting over the page.
-  setTimeout(done, DURATION_MS + 400);
+  setTimeout(done, ms + 400);
+  return ms;
 }

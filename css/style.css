@@ -679,61 +679,98 @@ kbd {
    actually on screen (see pageTurn.js), so this is the book's own paper
    colour rather than a generic white flash; the gradient darkens towards the
    hinge the way a real page shades as it lifts. */
+/* A real sheet with two sides, so it can go all the way over. `inset` is
+   overridden inline to match the page actually on screen. */
 .page-leaf {
   position: absolute; inset: 0;
-  z-index: 3; pointer-events: none; overflow: hidden;
-  /* inset is overridden inline to match the page actually on screen. */
-  background: var(--page-bg);
-  backface-visibility: hidden;
+  z-index: 3; pointer-events: none;
+  transform-style: preserve-3d;
   will-change: transform;
-  box-shadow: 0 0 24px -4px rgba(0, 0, 0, 0.4);
 }
-/* When the leaf carries a picture of the page it's replacing, that picture
-   is the whole of it. */
-.page-leaf.has-page { background: none; }
-.page-leaf > canvas { width: 100%; height: 100%; display: block; }
+.leaf-face {
+  position: absolute; inset: 0; overflow: hidden;
+  backface-visibility: hidden; -webkit-backface-visibility: hidden;
+  box-shadow: 0 0 26px -6px rgba(0, 0, 0, 0.45);
+}
+/* The explicit (identity) rotation matters: backface-visibility only applies
+   to an element taking part in a 3D rendering context, and without a
+   transform of its own the front face is not, so it carried on showing
+   through — mirrored — once the sheet had turned past edge-on. */
+.leaf-front { transform: rotateY(0deg); }
+.leaf-face canvas {
+  width: 100%; height: 100%; display: block;
+  backface-visibility: hidden; -webkit-backface-visibility: hidden;
+}
+/* An EPUB has no canvas to photograph, so its sheet is plain paper. */
+.leaf-front.blank { background: var(--page-bg); }
 
-/* The shading deepens as the sheet turns edge-on to the light. A separate
-   element so it can fade on its own curve rather than being baked into the
-   leaf's own transform. */
+/* The reverse of the sheet: the same paper, a shade darker, lit from the
+   spine side the way the back of a lifted page is. */
+.leaf-back {
+  transform: rotateY(180deg);
+  background:
+    linear-gradient(to left, rgba(0,0,0,0.16), rgba(0,0,0,0.03) 45%, rgba(255,255,255,0.05)),
+    var(--page-bg);
+}
+
+/* Shading on the face, deepening as it turns edge-on to the light. */
 .page-leaf-shade {
   position: absolute; inset: 0; opacity: 0;
-  background: linear-gradient(to left, rgba(0,0,0,0.45), rgba(0,0,0,0) 65%);
+  background: linear-gradient(to left, rgba(0,0,0,0.5), rgba(0,0,0,0) 70%);
+  animation: leafShade var(--turn-ms) ease-in-out forwards;
 }
 .page-leaf.back .page-leaf-shade {
-  background: linear-gradient(to right, rgba(0,0,0,0.45), rgba(0,0,0,0) 65%);
+  background: linear-gradient(to right, rgba(0,0,0,0.5), rgba(0,0,0,0) 70%);
 }
-.page-leaf.forward .page-leaf-shade { animation: leafShade var(--turn-ms) ease-in forwards; }
-.page-leaf.back .page-leaf-shade { animation: leafShade var(--turn-ms) ease-in forwards; }
 @keyframes leafShade {
   0%   { opacity: 0; }
-  100% { opacity: 1; }
+  50%  { opacity: 1; }
+  100% { opacity: 0.55; }
 }
 /* Opaque for most of the swing and only fading at the very end. Fading from
    the first frame made it a faint wash over the text rather than a sheet of
    paper moving in front of it — the whole point is that it should look
    solid. The gradient darkens towards the hinge the way a lifting page
    shades, and the shadow is thrown onto the page underneath. */
-/* Both directions rotate the page you're leaving about the spine, revealing
-   the page that is already sitting underneath. Easing out hard, the way a
-   sheet of paper falls: quick to lift, slow to land. */
+/* The full turn: the page you're leaving lifts and goes all the way over,
+   half a revolution about the spine, landing face-down on the other side.
+   The page beneath is revealed from under it as it passes.
+   Forward it falls to the left, back to the right. Eased in and out, like a
+   sheet with weight — slow to start moving, quick through the middle, slow
+   to settle — rather than the linear sweep of a wipe. */
 .page-leaf.forward {
   transform-origin: left center;
-  animation: leafForward var(--turn-ms) cubic-bezier(0.33, 0.0, 0.2, 1) forwards;
+  animation: leafForward var(--turn-ms) cubic-bezier(0.42, 0.02, 0.35, 1) forwards;
 }
 .page-leaf.back {
   transform-origin: right center;
-  animation: leafBack var(--turn-ms) cubic-bezier(0.33, 0.0, 0.2, 1) forwards;
+  animation: leafBack var(--turn-ms) cubic-bezier(0.42, 0.02, 0.35, 1) forwards;
 }
+/* The slight lift out of the plane at the midpoint stops it reading as a
+   flat wipe; the fade is only over the last few per cent, so the sheet is
+   fully visible for the whole arc and vanishes once it is lying flat. */
+/* Transform only, deliberately. Animating opacity here as well makes the
+   browser treat the leaf as a group to be composited, which quietly turns
+   `transform-style: preserve-3d` into `flat` — and a flattened leaf has no
+   sides, so the front face carried on showing through, mirrored, after the
+   sheet had turned past edge-on. The fade lives on the back face instead,
+   which needs no 3D of its own. */
 @keyframes leafForward {
-  0%   { transform: rotateY(0deg); }
-  85%  { transform: rotateY(-86deg); }
-  100% { transform: rotateY(-96deg); opacity: 0; }
+  0%   { transform: rotateY(0deg) translateZ(0); }
+  50%  { transform: rotateY(-90deg) translateZ(16px); }
+  100% { transform: rotateY(-180deg) translateZ(0); }
 }
 @keyframes leafBack {
-  0%   { transform: rotateY(0deg); }
-  85%  { transform: rotateY(86deg); }
-  100% { transform: rotateY(96deg); opacity: 0; }
+  0%   { transform: rotateY(0deg) translateZ(0); }
+  50%  { transform: rotateY(90deg) translateZ(16px); }
+  100% { transform: rotateY(180deg) translateZ(0); }
+}
+/* The sheet is fully opaque for the whole arc and only lets go once it is
+   lying flat on the far side. */
+.leaf-back { animation: leafSettle var(--turn-ms) linear forwards; }
+@keyframes leafSettle {
+  0%, 90% { opacity: 1; }
+  100%    { opacity: 0; }
 }
 @media (prefers-reduced-motion: reduce) {
   .page-leaf { display: none; }

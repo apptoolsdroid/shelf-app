@@ -127,7 +127,7 @@ function grain(now, { delay, dur, peak, from, to, panFrom, panTo }) {
  * @param {number} dir  +1 forward (sound travels right to left),
  *                      -1 back (left to right)
  */
-export function playPageTurn(dir) {
+export function playPageTurn(dir, turnMs = 380) {
   if (!enabled) return;
   try {
     if (!ensureContext()) return;
@@ -141,21 +141,25 @@ export function playPageTurn(dir) {
     const panTo = forward ? -0.45 : 0.45;
     // A little variation per turn keeps it from sounding like a sample.
     const wobble = 0.9 + Math.random() * 0.2;
+    // Paper doesn't rustle for a whole second, so the grains don't simply
+    // stretch with the animation — they spread out across it, which is what
+    // a slower, longer turn of a real page actually sounds like.
+    const spread = Math.max(1, Math.min(2.1, turnMs / 380));
 
     // The swish of the page sweeping over.
     grain(now, {
-      delay: 0, dur: 0.26 * wobble, peak: 0.55,
+      delay: 0, dur: 0.26 * wobble * spread, peak: 0.55,
       from: 900, to: 2700 * wobble, panFrom, panTo,
     });
     // A quieter crinkle just behind it: the page is paper, not a cloth, and
     // this second layer is most of what makes it read that way.
     grain(now, {
-      delay: 0.045, dur: 0.17 * wobble, peak: 0.3,
+      delay: 0.045 * spread, dur: 0.17 * wobble * spread, peak: 0.3,
       from: 2100, to: 1250, panFrom: panFrom * 0.6, panTo: panTo * 0.6,
     });
     // The settle as it lands flat.
     grain(now, {
-      delay: 0.17, dur: 0.1, peak: 0.16,
+      delay: 0.17 * spread, dur: 0.1 * spread, peak: 0.16,
       from: 820, to: 580, panFrom: panTo, panTo,
     });
   } catch (_) {
