@@ -14,6 +14,7 @@ import * as pdfReader from "./readerPdf.js";
 import * as notes from "./notes.js";
 import * as pageTurn from "./pageTurn.js";
 import * as keys from "./shortcuts.js";
+import * as sound from "./sound.js";
 import * as backup from "./backup.js";
 import * as db from "./db.js";
 import * as live from "./firebaseSync.js";
@@ -1862,8 +1863,11 @@ function turnPage(dir) {
   }
 }
 
+// Picture and sound together, from the one place, so they can never
+// disagree about which way the page went.
 function animateTurn(dir) {
   pageTurn.playTurn(el("readerStage"), dir);
+  sound.playPageTurn(dir);
 }
 
 el("pageArrowPrev").addEventListener("click", (e) => { e.stopPropagation(); turnPage(-1); });
@@ -1913,6 +1917,7 @@ function readerShortcut(e) {
       else closeBook();
       break;
     case "b": el("bookmarkBtn").click(); break;
+    case "m": el("soundBtn").click(); break;
     case "n": el("notesBtn").click(); break;
     case "f": toggleImmersive(); break;
     case "p": el("penBtn").click(); break;
@@ -2018,6 +2023,25 @@ function toggleShortcutSheet(force) {
 
 el("shortcutClose").addEventListener("click", () => toggleShortcutSheet(false));
 el("readerKeysBtn").addEventListener("click", () => toggleShortcutSheet(true));
+
+function refreshSoundBtn() {
+  const on = sound.isEnabled();
+  const btn = el("soundBtn");
+  btn.textContent = on ? "🔊" : "🔇";
+  btn.classList.toggle("tool-active", on);
+  btn.title = on ? "Page-turn sound on (M)" : "Page-turn sound off (M)";
+}
+
+el("soundBtn").addEventListener("click", () => {
+  const on = sound.toggle();
+  refreshSoundBtn();
+  // Play it as confirmation when switching on — hearing it is the point, and
+  // it also gets the browser's permission to make sound out of the way on a
+  // real tap rather than on the first page turn.
+  if (on) sound.playPageTurn(1);
+  toast(on ? "Page-turn sound on" : "Page-turn sound off");
+});
+refreshSoundBtn();
 el("shortcutOverlay").addEventListener("click", (e) => {
   if (e.target === el("shortcutOverlay")) toggleShortcutSheet(false);
 });
@@ -2181,14 +2205,40 @@ document.addEventListener("visibilitychange", () => {
 // Version chip: shows which build is running, and tapping it forces an update
 // check and reload so you never have to guess whether you're on the latest.
 el("versionChip").textContent = `v${APP_VERSION}`;
+
+// Tapping the version says plainly whether what's on the server differs from
+// what's running, instead of reloading and leaving you to compare two numbers
+// yourself. The version file is read straight from the network with caching
+// bypassed, so the answer is about the server, not about any copy held here.
 el("versionChip").addEventListener("click", async () => {
-  toast(`Shelf v${APP_VERSION} — checking for updates…`);
+  toast(`Shelf v${APP_VERSION} — checking…`);
+  let published = null;
   try {
-    if (window.__shelfCheckUpdate) await window.__shelfCheckUpdate();
+    const url = new URL("./js/version.js", window.location.href).href + `?t=${Date.now()}`;
+    const text = await (await fetch(url, { cache: "no-store" })).text();
+    const match = text.match(/APP_VERSION\s*=\s*"([^"]+)"/);
+    published = match ? match[1] : null;
+  } catch (_) { /* offline, or the file isn't reachable */ }
+
+  if (!published) {
+    toast(`Running v${APP_VERSION} — couldn't reach the server to compare`);
+    return;
+  }
+  if (published === APP_VERSION) {
+    toast(`Running v${APP_VERSION} — this is the version that's published`);
+    return;
+  }
+
+  toast(`v${published} is published — updating from v${APP_VERSION}…`);
+  try {
     const regs = await navigator.serviceWorker.getRegistrations();
     await Promise.all(regs.map((r) => r.update()));
-  } catch (_) { /* offline: nothing to check against */ }
-  setTimeout(() => window.location.reload(), 600);
+    // Clearing the shell caches guarantees the reload below fetches fresh
+    // files even if a stale worker is still in charge.
+    const names = await caches.keys();
+    await Promise.all(names.filter((n) => n.startsWith("shelf-shell-")).map((n) => caches.delete(n)));
+  } catch (_) { /* a failed tidy-up shouldn't block the reload */ }
+  setTimeout(() => window.location.reload(), 800);
 });
 
 (async function boot() {

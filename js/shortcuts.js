@@ -52,6 +52,7 @@ export const SHORTCUTS = [
       { keys: ["B"], label: "Bookmark this page", id: "bookmark" },
       { keys: ["N"], label: "Open notes", id: "notes" },
       { keys: ["F"], label: "Full page — hide the bars", id: "immersive" },
+      { keys: ["M"], label: "Page-turn sound on or off", id: "sound" },
       { keys: ["Esc"], label: "Bring the bars back, or close the book", id: "escape" },
     ],
   },
